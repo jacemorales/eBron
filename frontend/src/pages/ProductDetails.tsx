@@ -4,6 +4,7 @@ import { MessageSquare, ShoppingBag, ChevronLeft, Tag } from 'lucide-react';
 import type { Product } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { maskEmail } from '../utils/mask';
 
 export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { id } = useParams<{ id: string }>();
@@ -23,7 +24,7 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   }, [id]);
 
   const handleChat = async () => {
-    if (!user) { navigate('/login'); return; }
+    if (!user) { navigate('/login?redirect=' + encodeURIComponent(window.location.pathname)); return; }
     if (!product) return;
     if (user.userId === product.sellerId) { onToast('info', 'This is your own listing.'); return; }
     const res = await api.startOrGetConversation(user, product.productId);
@@ -31,7 +32,7 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   };
 
   const handleBuy = () => {
-    if (!user) { navigate('/login'); return; }
+    if (!user) { navigate('/login?redirect=' + encodeURIComponent(window.location.pathname)); return; }
     if (!product) return;
     if (user.userId === product.sellerId) { onToast('error', 'Cannot buy your own product.'); return; }
     navigate(`/checkout/${product.productId}`);
@@ -69,8 +70,9 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
             <h1 className="text-2xl font-extrabold text-slate-900">{product.name}</h1>
             <div className="text-2xl font-black text-cu-blue">₦{Number(product.price).toLocaleString()}</div>
+            {/* Masked Seller Email for Privacy & Security */}
             <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-600">
-              Seller: <strong>{product.sellerName || 'CU Student'}</strong> ({product.sellerEmail})
+              Seller: <strong>{product.sellerName || 'CU Student'}</strong> ({maskEmail(product.sellerEmail)})
             </div>
             <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{product.description}</div>
           </div>
@@ -79,7 +81,7 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             <button
               type="button"
               onClick={handleChat}
-              className="flex-1 py-3 border-2 border-cu-blue text-cu-blue rounded-xl font-bold text-xs flex items-center justify-center gap-1.5"
+              className="flex-1 py-3 border-2 border-cu-blue text-cu-blue rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-cu-blue hover:text-white transition"
             >
               <MessageSquare className="w-4 h-4" /> Chat with Seller
             </button>
@@ -87,7 +89,7 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               type="button"
               onClick={handleBuy}
               disabled={product.availability !== 'available'}
-              className="flex-1 py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-md"
+              className="flex-1 py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition"
             >
               <ShoppingBag className="w-4 h-4" /> Buy Now
             </button>

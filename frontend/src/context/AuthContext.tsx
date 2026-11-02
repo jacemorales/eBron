@@ -26,16 +26,19 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-const AUTH_KEY = 'ebron_active_user';
+const SESSION_TOKEN_KEY = 'ebron_session_user';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Restore authenticated session from sessionStorage on browser refresh
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(AUTH_KEY);
-      if (saved) setUser(JSON.parse(saved));
+      const saved = sessionStorage.getItem(SESSION_TOKEN_KEY);
+      if (saved) {
+        setUser(JSON.parse(saved));
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -47,17 +50,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.login(email, pass);
     if (res.success && res.user) {
       setUser(res.user);
-      localStorage.setItem(AUTH_KEY, JSON.stringify(res.user));
+      sessionStorage.setItem(SESSION_TOKEN_KEY, JSON.stringify(res.user));
       return { success: true };
     }
-    return { success: false, error: res.error || 'Login failed.' };
+    return { success: false, error: res.error || 'Invalid credentials or user not found.' };
   };
 
   const register = async (data: any) => {
     const res = await api.register(data);
     if (res.success && res.user) {
       setUser(res.user);
-      localStorage.setItem(AUTH_KEY, JSON.stringify(res.user));
+      sessionStorage.setItem(SESSION_TOKEN_KEY, JSON.stringify(res.user));
       return { success: true };
     }
     return { success: false, error: res.error || 'Registration failed.' };
@@ -65,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem(AUTH_KEY);
+    sessionStorage.removeItem(SESSION_TOKEN_KEY);
   };
 
   const updateProfile = async (data: any) => {
@@ -73,10 +76,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.updateDeliveryProfile(user.userId, data);
     if (res.success && res.user) {
       setUser(res.user);
-      localStorage.setItem(AUTH_KEY, JSON.stringify(res.user));
+      sessionStorage.setItem(SESSION_TOKEN_KEY, JSON.stringify(res.user));
       return { success: true };
     }
-    return { success: false, error: res.error };
+    return { success: false, error: res.error || 'Failed to update profile.' };
   };
 
   return (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bookmark, MessageSquare, Eye, ShieldCheck, Tag } from 'lucide-react';
+import { Bookmark, MessageSquare, Eye, Tag } from 'lucide-react';
 import type { Product } from '../types';
 import { ActionMenu } from './ActionMenu';
 import type { ActionMenuItem } from './ActionMenu';
@@ -15,6 +15,7 @@ export const ProductCard: React.FC<{
   const navigate = useNavigate();
   const { user } = useAuth();
   const [isSaved, setIsSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -23,19 +24,22 @@ export const ProductCard: React.FC<{
   }, [user, product.productId]);
 
   const handleToggleSave = async () => {
+    // Protected action: unauthenticated users redirect to login
     if (!user) {
-      navigate('/login');
+      navigate('/login?redirect=' + encodeURIComponent(window.location.pathname));
       return;
     }
+    setSaving(true);
     const res = await api.toggleSaveItem(user.userId, product.productId);
     setIsSaved(res.isSaved);
+    setSaving(false);
     if (onSavedChange) onSavedChange(product.productId, res.isSaved);
-    if (onToast) onToast('success', res.isSaved ? 'Item saved' : 'Item removed');
+    if (onToast) onToast('success', res.isSaved ? 'Item saved to your list' : 'Item removed from saved list');
   };
 
   const handleChat = async () => {
     if (!user) {
-      navigate('/login');
+      navigate('/login?redirect=' + encodeURIComponent(window.location.pathname));
       return;
     }
     if (user.userId === product.sellerId) {
@@ -80,15 +84,34 @@ export const ProductCard: React.FC<{
             alt={product.name}
             className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
           />
-          <span className="absolute top-2.5 left-2.5 bg-slate-900/80 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded-md">
+
+          <span className="absolute top-2.5 left-2.5 bg-slate-900/80 backdrop-blur-sm text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded-md">
             {product.condition}
           </span>
-          <div className="absolute top-2 right-2 bg-white/90 rounded-full shadow-sm">
+
+          {/* Direct visible bookmark/save button in top corner */}
+          <button
+            type="button"
+            disabled={saving}
+            title={isSaved ? "Remove from saved" : "Save item"}
+            aria-label={isSaved ? "Remove from saved" : "Save item"}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleSave();
+            }}
+            className="absolute top-2 right-10 p-1.5 rounded-full bg-white/90 backdrop-blur-sm shadow hover:bg-white text-slate-600 hover:text-cu-gold transition"
+          >
+            <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-cu-gold text-cu-gold' : 'text-slate-600'}`} />
+          </button>
+
+          {/* Three-dot contextual menu */}
+          <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full shadow-sm">
             <ActionMenu items={menuItems} ariaLabel={`Actions for ${product.name}`} />
           </div>
+
           {product.availability !== 'available' && (
             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center">
-              <span className="bg-red-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full">
+              <span className="bg-red-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full shadow">
                 {product.availability}
               </span>
             </div>
@@ -100,7 +123,7 @@ export const ProductCard: React.FC<{
             <Tag className="w-3 h-3 text-cu-gold" />
             <span className="truncate">{product.category}</span>
           </div>
-          <h3 className="font-bold text-slate-900 text-sm line-clamp-2">{product.name}</h3>
+          <h3 className="font-bold text-slate-900 text-sm line-clamp-2 group-hover:text-cu-blue transition">{product.name}</h3>
           <div className="text-base font-black text-cu-blue">₦{Number(product.price).toLocaleString()}</div>
         </div>
       </div>
@@ -111,9 +134,10 @@ export const ProductCard: React.FC<{
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleToggleSave(); }}
-            className="p-1 text-slate-400 hover:text-cu-gold"
+            className="text-xs font-semibold text-cu-blue hover:text-cu-gold flex items-center gap-1"
           >
-            <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-cu-gold text-cu-gold' : ''}`} />
+            <Bookmark className={`w-3.5 h-3.5 ${isSaved ? 'fill-cu-gold text-cu-gold' : ''}`} />
+            <span>{isSaved ? 'Saved' : 'Save'}</span>
           </button>
         </div>
       </div>

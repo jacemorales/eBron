@@ -1,154 +1,217 @@
 # eBron – Covenant University Student Marketplace
 
-eBron is an eBay-inspired student marketplace designed exclusively for students of Covenant University. It provides an unified platform for students to buy, sell, save items, communicate in real-time, confirm hostel deliveries, and transact securely through a dual-party confirmation escrow payment protection mechanism.
+eBron is an eBay-inspired student marketplace designed exclusively for students of Covenant University. It provides a unified platform for students to buy, sell, save items, communicate in real-time, confirm hostel deliveries, and transact securely through a two-step transaction confirmation protection system.
 
 ---
 
-## Architecture Overview
+## A. Project Overview
 
-- **Frontend**: Vite + React 18 + TypeScript + Tailwind CSS + Lucide Icons + React Router DOM
-- **Backend**: Google Apps Script (GAS) Web App + modular handlers
-- **Database**: Google Sheets (13 structured tables with relational foreign IDs)
-
----
-
-## Directory Structure
-
-```
-├── backend/
-│   ├── Setup.js        # Automatic sheet creation & schema definitions
-│   ├── Auth.js         # CU email (@stu.cu.edu.ng) & dynamic gender-hall validation
-│   ├── Products.js     # Product listing, filtering, soft-delete & restore
-│   ├── Orders.js       # Transaction state machine & dual confirmation logic
-│   ├── Wallet.js       # Available vs Pending balances & withdrawal processing
-│   ├── Messages.js     # Buyer-seller real-time chat coordination
-│   ├── Admin.js        # Dynamic analytics calculation from real records
-│   ├── Code.js         # Google Apps Script doGet/doPost request router
-│   └── tests/          # Unit tests verifying backend business logic
-├── frontend/
-│   ├── src/
-│   │   ├── components/ # Navbar, ActionMenu, ProductCard, EmptyState, Skeletons
-│   │   ├── context/    # AuthContext with profile synchronization
-│   │   ├── pages/      # Browse, Details, Checkout, Orders, Sales, Wallet, Chat, Admin
-│   │   ├── services/   # Typed API client with GAS connection
-│   │   └── types/      # TypeScript data models
-│   └── e2e/            # Playwright end-to-end integration tests
-└── README.md
-```
+- **Purpose**: A dedicated university marketplace enabling verified Covenant University students to buy and sell textbooks, electronics, hostel provisions, and essentials safely.
+- **Key Features**:
+  - Unified accounts: every registered student has access to both buying and selling functions without creating separate accounts.
+  - Institutional email verification: strictly accepts `@stu.cu.edu.ng` emails.
+  - Dynamic gender-based hostel assignment: Male (Peter, John, Paul, Daniel, Joseph, Joshua); Female (Mary, Lydia, Deborah).
+  - Two-Step Transaction Protection: buyers pay in simulated test mode; funds sit in seller's *Pending Balance* and are only released to *Available Balance* after both parties confirm handover and receipt.
+  - Comprehensive Admin Portal with live analytics calculated from real records across Daily, Weekly, and Monthly timeframes.
+- **Technologies Used**:
+  - **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide React, React Router DOM, Vite.
+  - **Backend**: Google Apps Script (GAS) Web App (`backend/Code.gs`).
+  - **Primary Database**: Google Sheets (Spreadsheet ID: `15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c`).
 
 ---
 
-## Google Sheets Database Setup
+## B. Prerequisites
 
-1. Create a new Google Spreadsheet in Google Drive (e.g. named `eBron CU Database`).
-2. Open **Extensions > Apps Script**.
-3. Copy the files from the `backend/` directory into your Apps Script editor:
-   - `Setup.gs` (from `Setup.js`)
-   - `Auth.gs` (from `Auth.js`)
-   - `Products.gs` (from `Products.js`)
-   - `Orders.gs` (from `Orders.js`)
-   - `Wallet.gs` (from `Wallet.js`)
-   - `Admin.gs` (from `Admin.js`)
-   - `Code.gs` (from `Code.js`)
-4. In the Apps Script toolbar, select the `setupDatabase` function from `Setup.gs` and click **Run**. This will automatically create all 13 required sheets with bold headers:
-   - `Users`
-   - `Products`
-   - `ProductImages`
-   - `SavedItems`
-   - `Conversations`
-   - `Messages`
-   - `Orders`
-   - `Transactions`
-   - `Wallets`
-   - `WithdrawalRequests`
-   - `Notifications`
-   - `Reports`
-   - `AdminLogs`
+1. **Node.js**: v18.0.0 or higher (v20+ recommended).
+2. **Google Account**: with access to Google Drive and Google Sheets.
+3. **Browser**: Modern web browser (Chrome, Firefox, Safari, Edge).
 
 ---
 
-## Deploying Google Apps Script Web App
+## C. Installation & Local Setup
 
-1. In the Apps Script editor, click **Deploy > New deployment**.
-2. Select **Web app** as the deployment type.
-3. Configure settings:
-   - **Description**: `eBron Production API`
-   - **Execute as**: `Me`
-   - **Who has access**: `Anyone` (required so the frontend can dispatch requests)
-4. Click **Deploy** and copy the resulting **Web app URL** (e.g., `https://script.google.com/macros/s/.../exec`).
+1. **Clone or Download the Repository**:
+   ```bash
+   git clone <repo-url>
+   cd <repo-folder>
+   ```
 
----
-
-## Frontend Installation & Configuration
-
-1. Navigate to the `frontend/` directory:
+2. **Install Frontend Dependencies**:
    ```bash
    cd frontend
    npm install
    ```
 
-2. Configure environment variables by creating `.env`:
+3. **Configure Frontend Environment**:
+   Create a `.env` file in the `frontend/` directory:
    ```bash
-   VITE_API_URL=https://script.google.com/macros/s/<YOUR_GAS_DEPLOYMENT_ID>/exec
+   VITE_API_URL=https://script.google.com/macros/s/<YOUR_DEPLOYMENT_ID>/exec
    ```
 
-3. Start development server:
+4. **Start Development Server**:
    ```bash
    npm run dev
    ```
+   Open `http://localhost:3000` in your browser.
 
-4. Build production bundle:
+5. **Build for Production**:
    ```bash
    npm run build
    ```
 
 ---
 
-## Authentication & Covenant University Validation
+## D. Google Sheets Database Blueprint & Configuration
 
-- **Email Restriction**: All student accounts must use an email ending in `@stu.cu.edu.ng`.
-- **Gender & Hall Validation**: The hall dropdown dynamically adapts based on selected gender:
-  - **Male**: Peter, John, Paul, Daniel, Joseph, Joshua
-  - **Female**: Mary, Lydia, Deborah
-- **Unified Role**: Every student account has instant access to both **Buy Products** and **Sell Products**.
-- **Delivery Sync**: Updating delivery information during checkout automatically syncs to the student's profile for future orders while saving an immutable snapshot for the specific order.
+The primary database is Google Sheets. You can either use the automatic setup function in Apps Script or manually create the sheets with the exact headers specified below.
+
+### Sheet 1: `Users`
+- **Purpose**: Stores student and administrator credentials, profiles, and delivery settings.
+- **Columns (in exact order)**:
+  `userId`, `fullName`, `regNumber`, `matricNumber`, `schoolEmail`, `gender`, `hallOfResidence`, `roomNumber`, `passwordHash`, `salt`, `role`, `status`, `createdAt`, `updatedAt`
+
+### Sheet 2: `Products`
+- **Purpose**: Marketplace listings with images, descriptions, pricing, and soft-delete flags.
+- **Columns (in exact order)**:
+  `productId`, `sellerId`, `sellerName`, `sellerEmail`, `name`, `description`, `category`, `price`, `condition`, `primaryImageUrl`, `images`, `availability`, `status`, `viewsCount`, `deletedBy`, `deletedAt`, `createdAt`, `updatedAt`
+
+### Sheet 3: `SavedItems`
+- **Purpose**: Student wishlists and bookmarked products.
+- **Columns (in exact order)**:
+  `savedId`, `userId`, `productId`, `createdAt`
+
+### Sheet 4: `Conversations`
+- **Purpose**: Direct chat threads between buyers and sellers linked to products.
+- **Columns (in exact order)**:
+  `conversationId`, `productId`, `productName`, `productPrice`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `lastMessageSnippet`, `lastMessageAt`, `createdAt`
+
+### Sheet 5: `Messages`
+- **Purpose**: Individual messages within a conversation.
+- **Columns (in exact order)**:
+  `messageId`, `conversationId`, `senderId`, `receiverId`, `content`, `isRead`, `createdAt`
+
+### Sheet 6: `Orders`
+- **Purpose**: Orders, delivery snapshots, test payment simulation, and dual-party confirmation timestamps.
+- **Columns (in exact order)**:
+  `orderId`, `orderReference`, `productId`, `productName`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `amount`, `status`, `paymentMode`, `paymentRef`, `deliveryFullName`, `deliveryGender`, `deliveryHall`, `deliveryRoom`, `sellerConfirmedAt`, `buyerConfirmedAt`, `completedAt`, `disputeReason`, `createdAt`, `updatedAt`
+
+### Sheet 7: `Wallets`
+- **Purpose**: Student wallet balances (Available Balance, Pending Balance, Total Earnings, Total Withdrawals).
+- **Columns (in exact order)**:
+  `walletId`, `userId`, `availableBalance`, `pendingBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
+
+### Sheet 8: `WithdrawalRequests`
+- **Purpose**: Payout requests submitted by students to receive money in their bank accounts.
+- **Columns (in exact order)**:
+  `requestId`, `userId`, `userName`, `userEmail`, `amount`, `bankName`, `accountNumber`, `accountName`, `status`, `adminNotes`, `processedAt`, `createdAt`
+
+### Sheet 9: `AnalyticsEvents`
+- **Purpose**: Historical timestamp logs for platform events and analytics tracking.
+- **Columns (in exact order)**:
+  `eventId`, `eventType`, `userId`, `amount`, `details`, `createdAt`
 
 ---
 
-## Payment Protection & Dual-Party Confirmation
+## E. Google Apps Script Deployment
 
-To eliminate fraud between students on campus:
-1. **Purchase in TEST MODE**: Buyer places order; money is held in escrow.
-2. **Pending Balance**: The seller's wallet immediately reflects the funds under **Pending Balance**. The funds cannot be withdrawn.
-3. **Dual Confirmation**:
-   - Seller delivers the product to the buyer's hall and clicks **Confirm Handover** in *Pending Sales*.
-   - Buyer inspects the item and clicks **Confirm I Received Product** in *Pending Purchases*.
-4. **Fund Release**: Only after **both** parties submit confirmation does the transaction transition to `Completed`, shifting the earnings from the seller's *Pending Balance* to their *Available Balance*.
-
-### Enabling Real PayPal Payments
-In `frontend/src/pages/Checkout.tsx` and `backend/Orders.js`, a placeholder for PayPal integration is prepared. When ready:
-1. Replace `paymentMode: 'TEST_MODE'` with the live PayPal Client SDK.
-2. Provide your `VITE_PAYPAL_CLIENT_ID` in `.env`.
-3. Un-comment the PayPal Button component inside the payment mode selector.
-
----
-
-## Initial Administrator Account
-
-An administrative account is automatically seeded in the system with full administrative capabilities:
-- **Email**: `admin@stu.cu.edu.ng`
-- **Password**: `admin123`
-- Direct access to `/admin` management console (Analytics, Soft-delete / Restore, User suspension, and Withdrawal processing).
+1. Open your Google Spreadsheet in Google Drive (ID: `15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c`).
+2. Click **Extensions > Apps Script**.
+3. Clear the default code and copy the entire contents of `backend/Code.gs` into the editor.
+4. Set the `SPREADSHEET_ID` variable in `backend/Code.gs` to `'15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c'`.
+5. In the toolbar, select `setupDatabase` and click **Run**.
+6. When prompted, click **Review permissions**, choose your Google Account, click **Advanced**, and then click **Go to Untitled project (unsafe)** to grant spreadsheet access.
+7. Click **Deploy > New deployment**:
+   - **Select type**: `Web app`
+   - **Description**: `eBron Production API v1`
+   - **Execute as**: `Me (your email)`
+   - **Who has access**: `Anyone` *(Critical: Allows your frontend application to call the endpoint)*
+8. Click **Deploy**. Copy the provided **Web app URL** (e.g. `https://script.google.com/macros/s/.../exec`).
+9. Paste this URL into `frontend/.env` as `VITE_API_URL`.
+10. **Redeploying after updates**: Whenever you change `Code.gs`, click **Deploy > Manage deployments > Edit > New version > Deploy**.
 
 ---
 
-## Testing
+## F. Administrator Setup
 
-- **Backend Unit Tests**:
-  ```bash
-  npm run test:backend
-  ```
-- **Playwright Frontend E2E Tests**:
-  ```bash
-  cd frontend && npx playwright test
-  ```
+Administrator details are stored and verified directly in the `Users` sheet in Google Sheets (with `role: "admin"`). No administrator passwords or credentials are hardcoded into the frontend.
+
+### Initial Administrator Record Template
+Copy and paste this row directly into row 2 of the `Users` sheet (or append to the end):
+
+| Column | Value |
+|---|---|
+| `userId` | `u_admin_001` |
+| `fullName` | `Covenant University Admin` |
+| `regNumber` | `ADM/2026/01` |
+| `matricNumber` | `CU/ADM/001` |
+| `schoolEmail` | `admin@stu.cu.edu.ng` |
+| `gender` | `Male` |
+| `hallOfResidence` | `Peter` |
+| `roomNumber` | `AdminSuite1` |
+| `passwordHash` | `414777a8848d6db3866b1a13e2bb97f5a9f242d5e272a8069502b489a202dfb8` |
+| `salt` | `covenant_admin_salt` |
+| `role` | `admin` |
+| `status` | `active` |
+| `createdAt` | `2026-11-01T00:00:00.000Z` |
+| `updatedAt` | `2026-11-01T00:00:00.000Z` |
+
+*(The template hash above corresponds to password: `AdminPassword123!`)*
+
+---
+
+## G. Image Hosting Configuration
+
+When uploading multiple product images, sellers can either paste valid image URLs or upload files. The application converts uploaded local images into standard data URIs and persists them into the `Products` sheet. For external image hosting (e.g., Cloudinary or Imgur), provide your CDN credentials in `frontend/.env` and configure direct URL uploads.
+
+---
+
+## H. Troubleshooting & Common Errors
+
+### Error 1: CORS Policy / Preflight Blocked
+- **Symptoms**:
+  `Access to fetch at 'https://script.google.com/...' from origin 'http://localhost:3000' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.`
+- **Cause**: Google Apps Script Web Apps do not respond to browser preflight HTTP `OPTIONS` requests. If the browser sends `Content-Type: application/json` or custom headers, the preflight request fails with CORS.
+- **Solution**:
+  In `frontend/src/services/api.ts`, all POST requests are sent with `headers: { 'Content-Type': 'text/plain;charset=utf-8' }` with a stringified JSON body. This treats the request as a simple request without triggering an `OPTIONS` preflight, allowing Google Apps Script to process the request and return JSON with standard CORS headers.
+
+### Error 2: Undefined Query Parameters in URL
+- **Symptoms**:
+  `?action=getProducts&category=undefined&search=undefined`
+- **Cause**: Optional React state variables passed as parameters evaluate to `"undefined"` strings when appended naively to URL search params.
+- **Solution**:
+  The `sanitizeParams()` helper in `frontend/src/services/api.ts` filters out any keys whose values are `undefined`, `null`, empty string, or literal `"undefined"` before building URL query strings.
+
+### Error 3: Local Persistence Fallback Errors
+- **Symptoms**:
+  `GAS endpoint call error, using local persistence fallback: TypeError: Failed to fetch`
+- **Cause**: Previous code tried to fallback to `localStorage` when network requests failed, violating the requirement to use Google Sheets as the sole source of truth.
+- **Solution**:
+  All `localStorage` fallback databases have been completely removed. If Google Apps Script is unreachable or `VITE_API_URL` is missing, the application returns a clear error message prompting the user to verify their network or Apps Script configuration.
+
+### Error 4: Registration Preflight Failure
+- **Symptoms**:
+  `Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present.`
+- **Cause**: Registration POST payload was previously dispatched with `application/json`, which triggered an unhandled CORS preflight in Google Apps Script.
+- **Solution**:
+  The `api.register()` method now uses `text/plain;charset=utf-8` payload serialization, cleanly processed by `doPost(e)` in `backend/Code.gs`.
+
+### Error 5: Wallet Request Failure
+- **Symptoms**:
+  `getWallet&userId=... failed`
+- **Cause**: Wallet queries failing due to nonexistent wallet records in new user accounts.
+- **Solution**:
+  `doGet` in `backend/Code.gs` automatically creates and appends an empty wallet record with 0 available and pending balances if one does not exist for the queried user ID.
+
+---
+
+## I. Testing & Verification
+
+1. **Backend Unit Tests**:
+   ```bash
+   npm run test:backend
+   ```
+2. **Frontend End-to-End Tests**:
+   ```bash
+   cd frontend
+   npx playwright test
+   ```

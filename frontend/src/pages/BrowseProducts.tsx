@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Store } from 'lucide-react';
-import type { Product, ProductCategory, ProductCondition } from '../types';
+import type { Product, ProductCategory } from '../types';
 import { api } from '../services/api';
 import { ProductCard } from '../components/ProductCard';
 import { EmptyState } from '../components/EmptyState';
@@ -45,9 +45,17 @@ export const BrowseProducts: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      <div className="bg-gradient-to-r from-cu-blue via-cu-dark to-slate-900 text-white p-8 rounded-3xl shadow-xl">
-        <h1 className="text-3xl font-extrabold">Covenant University Student Marketplace</h1>
-        <p className="text-slate-300 text-sm mt-2">Buy and sell securely with dual-confirmation escrow protection.</p>
+      {/* Marketplace Banner (No "escrow" word, updated transaction confirmation message) */}
+      <div className="bg-gradient-to-r from-cu-blue via-cu-dark to-slate-900 text-white p-8 sm:p-10 rounded-3xl shadow-xl space-y-3">
+        <div className="inline-flex items-center gap-2 bg-cu-gold/20 text-cu-gold border border-cu-gold/30 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+          Covenant University Marketplace
+        </div>
+        <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
+          eBron Student Marketplace
+        </h1>
+        <p className="text-slate-300 text-sm sm:text-base max-w-2xl leading-relaxed">
+          Buy and sell with confidence through our secure, two-step transaction confirmation system.
+        </p>
       </div>
 
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-3">
@@ -58,7 +66,7 @@ export const BrowseProducts: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search textbooks, devices, hostel items..."
-            className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm"
+            className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-cu-blue"
           />
         </div>
         <select
@@ -71,7 +79,7 @@ export const BrowseProducts: React.FC<{ onToast: (type: 'success' | 'error' | 'i
         <button
           type="button"
           onClick={fetchProducts}
-          className="px-5 py-2 bg-cu-blue text-white rounded-xl text-sm font-bold"
+          className="px-5 py-2 bg-cu-blue hover:bg-cu-dark text-white rounded-xl text-sm font-bold shadow-sm transition"
         >
           Search
         </button>
