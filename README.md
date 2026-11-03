@@ -16,7 +16,7 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
 - **Technologies Used**:
   - **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide React, React Router DOM, Vite.
   - **Backend**: Google Apps Script (GAS) Web App (`backend/Code.gs`).
-  - **Primary Database**: Google Sheets (Spreadsheet ID: `15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c`).
+  - **Primary Database**: Google Sheets.
 
 ---
 
@@ -43,10 +43,11 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
    ```
 
 3. **Configure Frontend Environment**:
-   Create a `.env` file in the `frontend/` directory:
+   Create a `.env` file in the `frontend/` directory and configure your Google Apps Script Web App URL:
    ```bash
-   VITE_API_URL=https://script.google.com/macros/s/<YOUR_DEPLOYMENT_ID>/exec
+   VITE_API_URL=https://script.google.com/macros/s/<YOUR_APPS_SCRIPT_DEPLOYMENT_ID>/exec
    ```
+   > **Note on Backend Communication:** eBron communicates directly with Google Apps Script and Google Sheets. All actions (registering accounts, authenticating, listing items, saving wishlists, placing orders, and balance confirmations) send live HTTP requests to this URL. Ensure `VITE_API_URL` is set before testing registration or login.
 
 4. **Start Development Server**:
    ```bash
@@ -114,11 +115,11 @@ The primary database is Google Sheets. You can either use the automatic setup fu
 
 ## E. Google Apps Script Deployment
 
-1. Open your Google Spreadsheet in Google Drive (ID: `15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c`).
+1. Open your Google Spreadsheet in Google Drive.
 2. Click **Extensions > Apps Script**.
-3. Clear the default code and copy the entire contents of `backend/Code.gs` into the editor.
-4. Set the `SPREADSHEET_ID` variable in `backend/Code.gs` to `'15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c'`.
-5. In the toolbar, select `setupDatabase` and click **Run**.
+3. Clear any existing code and copy the entire contents of `backend/Code.gs` into the editor.
+4. Set the `SPREADSHEET_ID` variable in `backend/Code.gs` to your Google Spreadsheet ID (or leave it bound to the active spreadsheet).
+5. In the Apps Script toolbar, select `setupDatabase` and click **Run**.
 6. When prompted, click **Review permissions**, choose your Google Account, click **Advanced**, and then click **Go to Untitled project (unsafe)** to grant spreadsheet access.
 7. Click **Deploy > New deployment**:
    - **Select type**: `Web app`

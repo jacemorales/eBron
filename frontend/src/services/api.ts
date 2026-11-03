@@ -35,9 +35,7 @@ function sanitizeParams(params: Record<string, any>): Record<string, string> {
 
 async function gasGet(action: string, params: Record<string, any> = {}): Promise<any> {
   if (!GAS_API_URL) {
-    // When VITE_API_URL is unconfigured in test/dev environment, provide a local mock service
-    // so tests and frontend development can continue seamlessly without crashing.
-    return localMockHandler('GET', action, params);
+    throw new Error('Google Apps Script Web App URL (VITE_API_URL) is not configured in .env. Please configure your Google Apps Script deployment URL.');
   }
 
   const url = new URL(GAS_API_URL);
@@ -48,161 +46,50 @@ async function gasGet(action: string, params: Record<string, any> = {}): Promise
     url.searchParams.set(k, v);
   }
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: { 'Accept': 'application/json' }
-  });
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
 
-  if (!response.ok) {
-    throw new Error(`Google Apps Script API responded with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Google Apps Script API responded with HTTP status ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (err: any) {
+    console.error(`gasGet [${action}] failed:`, err);
+    throw new Error(`Failed to communicate with Google Sheets backend: ${err.message || 'Network error'}`);
   }
-
-  return await response.json();
 }
 
 async function gasPost(action: string, payload: Record<string, any> = {}): Promise<any> {
   if (!GAS_API_URL) {
-    return localMockHandler('POST', action, payload);
+    throw new Error('Google Apps Script Web App URL (VITE_API_URL) is not configured in .env. Please configure your Google Apps Script deployment URL.');
   }
 
-  const response = await fetch(GAS_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, ...payload })
-  });
+  try {
+    const response = await fetch(GAS_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, ...payload })
+    });
 
-  if (!response.ok) {
-    throw new Error(`Google Apps Script API responded with status ${response.status}`);
-  }
-
-  return await response.json();
-}
-
-// Memory-only mock database for local test runs when no Google Apps Script URL is set in environment
-const memoryDb: {
-  users: User[];
-  products: Product[];
-  saved: any[];
-  conversations: any[];
-  messages: any[];
-  orders: any[];
-  wallets: Record<string, any>;
-  withdrawals: any[];
-} = {
-  users: [],
-  products: [],
-  saved: [],
-  conversations: [],
-  messages: [],
-  orders: [],
-  wallets: {},
-  withdrawals: []
-};
-
-function localMockHandler(method: string, action: string, data: any): any {
-  if (action === 'register') {
-    const newUser: User = {
-      userId: 'u_' + Date.now(),
-      fullName: data.fullName,
-      regNumber: data.regNumber,
-      matricNumber: data.matricNumber,
-      schoolEmail: data.schoolEmail,
-      gender: data.gender,
-      hallOfResidence: data.hallOfResidence,
-      roomNumber: data.roomNumber,
-      role: 'student',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    memoryDb.users.push(newUser);
-    return { success: true, user: newUser };
-  }
-
-  if (action === 'login') {
-    const u = memoryDb.users.find(x => x.schoolEmail.toLowerCase() === (data.schoolEmail || '').toLowerCase());
-    if (u) return { success: true, user: u };
-    return { success: false, error: 'User not found' };
-  }
-
-  if (action === 'getProfile') {
-    const u = memoryDb.users.find(x => x.userId === data.userId);
-    return { success: true, user: u || null };
-  }
-
-  if (action === 'updateProfile') {
-    const u = memoryDb.users.find(x => x.userId === data.userId);
-    if (u) {
-      u.fullName = data.fullName;
-      u.gender = data.gender;
-      u.hallOfResidence = data.hallOfResidence;
-      u.roomNumber = data.roomNumber;
-      return { success: true, user: u };
+    if (!response.ok) {
+      throw new Error(`Google Apps Script API responded with HTTP status ${response.status}`);
     }
-    return { success: false, error: 'User not found' };
+
+    const data = await response.json();
+    return data;
+  } catch (err: any) {
+    console.error(`gasPost [${action}] failed:`, err);
+    throw new Error(`Failed to communicate with Google Sheets backend: ${err.message || 'Network error'}`);
   }
-
-  if (action === 'getProducts') {
-    return { success: true, products: memoryDb.products.filter(p => p.status !== 'deleted') };
-  }
-
-  if (action === 'getProductById') {
-    return { success: true, product: memoryDb.products.find(p => p.productId === data.productId) || null };
-  }
-
-  if (action === 'createProduct') {
-    const p: Product = {
-      productId: 'p_' + Date.now(),
-      sellerId: data.sellerId,
-      sellerName: data.sellerName,
-      sellerEmail: data.sellerEmail,
-      name: data.name,
-      description: data.description,
-      category: data.category,
-      price: data.price,
-      condition: data.condition,
-      primaryImageUrl: data.images[0] || '',
-      images: data.images,
-      availability: 'available',
-      status: 'active',
-      viewsCount: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    memoryDb.products.push(p);
-    return { success: true, product: p };
-  }
-
-  if (action === 'isItemSaved') return { success: true, isSaved: false };
-  if (action === 'toggleSaveItem') return { success: true, isSaved: true };
-  if (action === 'getSavedItems') return { success: true, savedItems: [] };
-  if (action === 'getConversations') return { success: true, conversations: [] };
-  if (action === 'getMessages') return { success: true, messages: [] };
-  if (action === 'getOrders') return { success: true, orders: [] };
-  if (action === 'getWallet') return { success: true, wallet: { availableBalance: 0, pendingBalance: 0, totalEarnings: 0, totalWithdrawals: 0 } };
-  if (action === 'getUserWithdrawals') return { success: true, withdrawals: [] };
-  if (action === 'getAllUsers') return { success: true, users: memoryDb.users };
-  if (action === 'getAllWithdrawals') return { success: true, withdrawals: [] };
-
-  if (action === 'getAdminAnalytics') {
-    return {
-      success: true,
-      analytics: {
-        timeframe: data.timeframe || 'all',
-        platform: { totalUsers: memoryDb.users.length, activeUsers: memoryDb.users.length, totalProducts: memoryDb.products.length, availableProducts: memoryDb.products.length, soldProducts: 0, completedOrders: 0 },
-        users: { newRegistrations: memoryDb.users.length, activeBuyers: 0, activeSellers: 0, bothBuyerAndSeller: 0, suspendedUsers: 0 },
-        products: { totalUploaded: memoryDb.products.length, available: memoryDb.products.length, sold: 0, deleted: 0, byCategory: {} },
-        sales: { totalOrders: 0, completedOrders: 0, pendingOrders: 0, cancelledOrders: 0, disputedOrders: 0, totalVolume: 0, completedVolume: 0, averageOrderValue: 0 },
-        financial: { totalPendingFunds: 0, totalAvailableBalances: 0, totalWithdrawalRequestsCount: 0, totalWithdrawalsProcessed: 0, simulatedVolume: 0 },
-        engagement: { totalMessages: 0, totalSavedItems: 0 }
-      }
-    };
-  }
-
-  return { success: true };
 }
 
 export const api = {
+  // Authentication & Profile
   async register(data: {
     fullName: string;
     regNumber: string;
@@ -214,25 +101,28 @@ export const api = {
     password: string;
   }): Promise<{ success: boolean; user?: User; error?: string }> {
     try {
-      return await gasPost('register', data);
+      const res = await gasPost('register', data);
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Registration request failed.' };
+      return { success: false, error: err.message };
     }
   },
 
   async login(schoolEmail: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
     try {
-      return await gasPost('login', { schoolEmail, password });
+      const res = await gasPost('login', { schoolEmail, password });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Login request failed.' };
+      return { success: false, error: err.message };
     }
   },
 
   async getProfile(userId: string): Promise<{ success: boolean; user?: User; error?: string }> {
     try {
-      return await gasGet('getProfile', { userId });
+      const res = await gasGet('getProfile', { userId });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to retrieve profile.' };
+      return { success: false, error: err.message };
     }
   },
 
@@ -243,12 +133,14 @@ export const api = {
     roomNumber: string;
   }): Promise<{ success: boolean; user?: User; error?: string }> {
     try {
-      return await gasPost('updateProfile', { userId, ...data });
+      const res = await gasPost('updateProfile', { userId, ...data });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Profile update failed.' };
+      return { success: false, error: err.message };
     }
   },
 
+  // Products
   async getProducts(filters?: {
     category?: string;
     search?: string;
@@ -288,49 +180,55 @@ export const api = {
     primaryIndex?: number;
   }): Promise<{ success: boolean; product?: Product; error?: string }> {
     try {
-      return await gasPost('createProduct', {
+      const res = await gasPost('createProduct', {
         sellerId: seller.userId,
         sellerName: seller.fullName,
         sellerEmail: seller.schoolEmail,
         ...data
       });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to list product.' };
+      return { success: false, error: err.message };
     }
   },
 
   async updateProduct(sellerId: string, productId: string, data: Partial<Product>): Promise<{ success: boolean; product?: Product; error?: string }> {
     try {
-      return await gasPost('updateProduct', { sellerId, productId, ...data });
+      const res = await gasPost('updateProduct', { sellerId, productId, ...data });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to update product.' };
+      return { success: false, error: err.message };
     }
   },
 
   async toggleProductAvailability(sellerId: string, productId: string): Promise<{ success: boolean; product?: Product; error?: string }> {
     try {
-      return await gasPost('toggleProductAvailability', { sellerId, productId });
+      const res = await gasPost('toggleProductAvailability', { sellerId, productId });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to toggle status.' };
+      return { success: false, error: err.message };
     }
   },
 
   async softDeleteProduct(productId: string, adminId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      return await gasPost('softDeleteProduct', { productId, adminId });
+      const res = await gasPost('softDeleteProduct', { productId, adminId });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to soft delete product.' };
+      return { success: false, error: err.message };
     }
   },
 
   async restoreProduct(productId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      return await gasPost('restoreProduct', { productId });
+      const res = await gasPost('restoreProduct', { productId });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to restore product.' };
+      return { success: false, error: err.message };
     }
   },
 
+  // Saved Items
   async getSavedItems(userId: string): Promise<Product[]> {
     try {
       const res = await gasGet('getSavedItems', { userId });
@@ -360,6 +258,7 @@ export const api = {
     }
   },
 
+  // Conversations & Messages
   async getConversations(userId: string): Promise<Conversation[]> {
     try {
       const res = await gasGet('getConversations', { userId });
@@ -372,19 +271,21 @@ export const api = {
 
   async startOrGetConversation(buyer: User, productId: string): Promise<{ success: boolean; conversation?: Conversation; error?: string }> {
     try {
-      return await gasPost('startOrGetConversation', {
+      const res = await gasPost('startOrGetConversation', {
         buyerId: buyer.userId,
         buyerName: buyer.fullName,
         productId
       });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to initiate conversation.' };
+      return { success: false, error: err.message };
     }
   },
 
   async getMessages(conversationId: string, userId: string): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
     try {
-      return await gasGet('getMessages', { conversationId, userId });
+      const res = await gasGet('getMessages', { conversationId, userId });
+      return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -392,12 +293,14 @@ export const api = {
 
   async sendMessage(conversationId: string, senderId: string, content: string): Promise<{ success: boolean; message?: Message; error?: string }> {
     try {
-      return await gasPost('sendMessage', { conversationId, senderId, content });
+      const res = await gasPost('sendMessage', { conversationId, senderId, content });
+      return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   },
 
+  // Orders, Test Payment & Dual Confirmation
   async createOrder(buyer: User, productId: string, deliveryInfo: {
     fullName: string;
     gender: Gender;
@@ -405,14 +308,15 @@ export const api = {
     roomNumber: string;
   }): Promise<{ success: boolean; order?: Order; error?: string }> {
     try {
-      return await gasPost('createOrder', {
+      const res = await gasPost('createOrder', {
         buyerId: buyer.userId,
         buyerName: buyer.fullName,
         productId,
         deliveryInfo
       });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Payment simulation failed.' };
+      return { success: false, error: err.message };
     }
   },
 
@@ -424,15 +328,17 @@ export const api = {
     error?: string;
   }> {
     try {
-      return await gasPost('confirmOrder', { orderId, role, userId });
+      const res = await gasPost('confirmOrder', { orderId, role, userId });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Confirmation failed.' };
+      return { success: false, error: err.message };
     }
   },
 
   async disputeOrder(orderId: string, userId: string, reason: string): Promise<{ success: boolean; error?: string }> {
     try {
-      return await gasPost('disputeOrder', { orderId, userId, reason });
+      const res = await gasPost('disputeOrder', { orderId, userId, reason });
+      return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -458,6 +364,7 @@ export const api = {
     }
   },
 
+  // Wallets & Withdrawals
   async getWallet(userId: string): Promise<Wallet> {
     try {
       const res = await gasGet('getWallet', { userId });
@@ -483,9 +390,10 @@ export const api = {
     accountName: string;
   }): Promise<{ success: boolean; request?: WithdrawalRequest; error?: string }> {
     try {
-      return await gasPost('requestWithdrawal', { userId, ...data });
+      const res = await gasPost('requestWithdrawal', { userId, ...data });
+      return res;
     } catch (err: any) {
-      return { success: false, error: err.message || 'Withdrawal failed.' };
+      return { success: false, error: err.message };
     }
   },
 
@@ -499,6 +407,7 @@ export const api = {
     }
   },
 
+  // Admin Operations
   async getAdminAnalytics(timeframe: 'daily' | 'weekly' | 'monthly' | 'all' = 'all') {
     try {
       const res = await gasGet('getAdminAnalytics', { timeframe });
@@ -529,7 +438,8 @@ export const api = {
 
   async toggleUserSuspension(userId: string): Promise<{ success: boolean; user?: User; error?: string }> {
     try {
-      return await gasPost('toggleUserSuspension', { userId });
+      const res = await gasPost('toggleUserSuspension', { userId });
+      return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -547,7 +457,8 @@ export const api = {
 
   async processWithdrawal(requestId: string, decision: 'processed' | 'rejected', adminNotes: string = ''): Promise<{ success: boolean; error?: string }> {
     try {
-      return await gasPost('processWithdrawal', { requestId, decision, adminNotes });
+      const res = await gasPost('processWithdrawal', { requestId, decision, adminNotes });
+      return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
