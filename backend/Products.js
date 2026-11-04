@@ -53,6 +53,35 @@ export function softDeleteProduct(product, adminId) {
   };
 }
 
+export const REPORT_CATEGORIES = [
+  'Scammer or fraudulent seller',
+  'Fake or counterfeit product',
+  'Potentially stolen product',
+  'Misleading product description or images',
+  'Prohibited or inappropriate item',
+  'Suspicious pricing or suspicious activity',
+  'Other'
+];
+
+export function validateProductReport(user, product, category, explanation, existingReports = []) {
+  const errors = [];
+  if (!user) errors.push('You must be logged in to report a product.');
+  if (!product) errors.push('Product does not exist.');
+  if (product && user && product.sellerId === user.userId) {
+    errors.push('You cannot report your own product.');
+  }
+  if (!category || !REPORT_CATEGORIES.includes(category)) {
+    errors.push('Please select a valid report category.');
+  }
+  if (!explanation || typeof explanation !== 'string' || explanation.trim().length < 5) {
+    errors.push('Please provide an explanation of at least 5 characters describing the issue.');
+  }
+  if (existingReports.some(r => r.productId === product?.productId && r.reporterId === user?.userId && r.status !== 'dismissed')) {
+    errors.push('You have already submitted a report for this product.');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
 export function restoreProduct(product) {
   return {
     ...product,

@@ -54,10 +54,10 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
     });
 
     if (res.success) {
-      onToast('success', 'Account created and saved in Google Sheets! Welcome to eBron.');
+      onToast('success', 'Account created successfully! Welcome to eBron.');
       navigate(redirectPath);
     } else {
-      const err = res.error || 'Registration failed. Please check your network or Google Sheets backend configuration.';
+      const err = res.error || 'Registration failed. Please check your details and try again.';
       setErrorMsg(err);
       onToast('error', err);
     }
@@ -92,7 +92,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
               value={fullName}
               onChange={e => setFullName(e.target.value)}
               required
-              placeholder="e.g. David Oyedepo"
+              placeholder="Michael Morgan"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-cu-blue"
             />
           </div>
@@ -105,7 +105,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
                 value={regNumber}
                 onChange={e => setRegNumber(e.target.value)}
                 required
-                placeholder="e.g. 21AB0123"
+                placeholder="2401234"
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-cu-blue font-mono"
               />
             </div>
@@ -116,7 +116,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
                 value={matricNumber}
                 onChange={e => setMatricNumber(e.target.value)}
                 required
-                placeholder="e.g. CU/21/0123"
+                placeholder="24jk123456"
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-cu-blue font-mono"
               />
             </div>
@@ -129,7 +129,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
               value={schoolEmail}
               onChange={e => setSchoolEmail(e.target.value)}
               required
-              placeholder="david.oyedepo@stu.cu.edu.ng"
+              placeholder="email@stu.cu.edu.ng"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-cu-blue"
             />
           </div>
@@ -187,7 +187,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             disabled={submitting}
             className="w-full py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue font-extrabold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1.5"
           >
-            <UserPlus className="w-4 h-4" /> {submitting ? 'Registering with Google Sheets...' : 'Complete Registration'}
+            <UserPlus className="w-4 h-4" /> {submitting ? 'Registering...' : 'Complete Registration'}
           </button>
         </form>
 

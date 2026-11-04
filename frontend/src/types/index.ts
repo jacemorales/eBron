@@ -45,6 +45,7 @@ export interface Product {
   category: ProductCategory;
   price: number;
   condition: ProductCondition;
+  stockNumber?: string;
   primaryImageUrl: string;
   images: string[];
   availability: ProductAvailability;
@@ -52,6 +53,35 @@ export interface Product {
   viewsCount: number;
   deletedBy?: string | null;
   deletedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ReportCategory =
+  | 'Scammer or fraudulent seller'
+  | 'Fake or counterfeit product'
+  | 'Potentially stolen product'
+  | 'Misleading product description or images'
+  | 'Prohibited or inappropriate item'
+  | 'Suspicious pricing or suspicious activity'
+  | 'Other';
+
+export type ReportStatus = 'pending' | 'under_review' | 'resolved' | 'dismissed';
+
+export interface ProductReport {
+  reportId: string;
+  productId: string;
+  productName: string;
+  productStockNumber?: string;
+  productImage?: string;
+  sellerId: string;
+  sellerName: string;
+  reporterId: string;
+  reporterEmail: string;
+  category: ReportCategory;
+  explanation: string;
+  status: ReportStatus;
+  adminNotes?: string;
   createdAt: string;
   updatedAt: string;
 }

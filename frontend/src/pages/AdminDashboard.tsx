@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ShieldAlert,
   Users,
@@ -15,15 +16,21 @@ import {
   BarChart3,
   MessageSquare,
   Activity,
-  AlertTriangle
+  AlertTriangle,
+  Flag,
+  ExternalLink,
+  Tag,
+  Check,
+  Search,
+  Filter
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import type { Product, User, WithdrawalRequest } from '../types';
+import type { Product, User, WithdrawalRequest, ProductReport, ReportStatus } from '../types';
 
 export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'analytics' | 'products' | 'deleted' | 'users' | 'withdrawals'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'reports' | 'products' | 'deleted' | 'users' | 'withdrawals'>('analytics');
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly' | 'monthly' | 'all'>('all');
   const [analytics, setAnalytics] = useState<any>(null);
 
@@ -31,27 +38,56 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const [deletedProducts, setDeletedProducts] = useState<Product[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [reports, setReports] = useState<ProductReport[]>([]);
+  const [reportFilterCat, setReportFilterCat] = useState('All');
+  const [reportFilterStatus, setReportFilterStatus] = useState('All');
+  const [reportSearch, setReportSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
   const refreshData = async () => {
     setLoading(true);
     try {
-      const [stats, allProds, users, wds] = await Promise.all([
+      const [stats, allProds, users, wds, allReps] = await Promise.all([
         api.getAdminAnalytics(timeframe),
         api.getProducts({ includeDeleted: true }),
         api.getAllUsers(),
-        api.getAllWithdrawals()
+        api.getAllWithdrawals(),
+        api.getReports({ timeframe })
       ]);
       setAnalytics(stats);
       setProducts(allProds.filter(p => p.status !== 'deleted'));
       setDeletedProducts(allProds.filter(p => p.status === 'deleted'));
       setUsersList(users);
       setWithdrawals(wds);
+      setReports(allReps);
     } catch (e) {
       console.error(e);
-      onToast('error', 'Failed to load admin records from Google Sheets.');
+      onToast('error', 'Failed to load platform records.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleUpdateReportStatus = async (reportId: string, status: ReportStatus) => {
+    const adminNotes = prompt(`Enter optional internal administrator notes for this report:`) || undefined;
+    const res = await api.updateReportStatus(reportId, status, adminNotes);
+    if (res.success) {
+      onToast('success', `Report marked as ${status.replace('_', ' ')}.`);
+      refreshData();
+    } else {
+      onToast('error', res.error || 'Failed to update report status.');
+    }
+  };
+
+  const handleAdminRemoveFromReport = async (productId: string, productName: string) => {
+    const reason = prompt(`Reason for removing "${productName}":`) || 'Violates marketplace guidelines';
+    if (!user) return;
+    const res = await api.removeProductAdmin(productId, user.userId, reason);
+    if (res.success) {
+      onToast('success', `Product "${productName}" removed from marketplace.`);
+      refreshData();
+    } else {
+      onToast('error', res.error || 'Failed to remove product.');
     }
   };
 
@@ -94,7 +130,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   };
 
   if (loading || !analytics) {
-    return <div className="text-center py-20 text-slate-400">Loading administrator console from Google Sheets...</div>;
+    return <div className="text-center py-20 text-slate-400">Loading administrator console...</div>;
   }
 
   return (
@@ -109,7 +145,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             eBron Management & Real-Time Analytics
           </h1>
           <p className="text-xs text-slate-500">
-            Powered by live Google Sheets records. All statistics reflect actual student records without fabrication.
+            Live marketplace analytics. All statistics reflect actual student records without fabrication.
           </p>
         </div>
 
@@ -152,14 +188,21 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
         <button
           type="button"
           onClick={() => setActiveTab('analytics')}
-          className={`pb-3 flex items-center gap-1.5 transition ${activeTab === 'analytics' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
+          className={`pb-3 flex items-center gap-1.5 transition whitespace-nowrap ${activeTab === 'analytics' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
         >
           <BarChart3 className="w-4 h-4" /> Comprehensive Analytics
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('reports')}
+          className={`pb-3 flex items-center gap-1.5 transition whitespace-nowrap ${activeTab === 'reports' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
+        >
+          <Flag className="w-4 h-4 text-red-600" /> Report Analysis ({reports.filter(r => r.status === 'pending' || r.status === 'under_review').length} Active)
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('products')}
-          className={`pb-3 flex items-center gap-1.5 transition ${activeTab === 'products' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
+          className={`pb-3 flex items-center gap-1.5 transition whitespace-nowrap ${activeTab === 'products' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
         >
           <ShoppingBag className="w-4 h-4" /> Active Listings ({products.length})
         </button>
@@ -365,6 +408,278 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
           </div>
         </div>
       )}
+
+      {/* TAB: REPORT ANALYSIS */}
+      {activeTab === 'reports' && (() => {
+        const totalReports = reports.length;
+        const pendingReports = reports.filter(r => r.status === 'pending').length;
+        const underReviewReports = reports.filter(r => r.status === 'under_review').length;
+        const resolvedReports = reports.filter(r => r.status === 'resolved').length;
+        const dismissedReports = reports.filter(r => r.status === 'dismissed').length;
+
+        // Calculate product report frequencies
+        const productReportCounts: Record<string, { count: number; name: string; productId: string; image: string; categories: Record<string, number>; reporters: Set<string> }> = {};
+        reports.forEach(r => {
+          if (!productReportCounts[r.productId]) {
+            productReportCounts[r.productId] = {
+              count: 0,
+              name: r.productName,
+              productId: r.productId,
+              image: r.productImage || '',
+              categories: {},
+              reporters: new Set()
+            };
+          }
+          productReportCounts[r.productId].count++;
+          productReportCounts[r.productId].categories[r.category] = (productReportCounts[r.productId].categories[r.category] || 0) + 1;
+          if (r.reporterId) productReportCounts[r.productId].reporters.add(r.reporterId);
+        });
+
+        const mostReportedProducts = Object.values(productReportCounts).sort((a, b) => b.count - a.count);
+
+        // Filtered list
+        const filteredReports = reports.filter(r => {
+          if (reportFilterCat !== 'All' && r.category !== reportFilterCat) return false;
+          if (reportFilterStatus !== 'All' && r.status !== reportFilterStatus) return false;
+          if (reportSearch.trim()) {
+            const q = reportSearch.toLowerCase();
+            const inName = r.productName.toLowerCase().includes(q);
+            const inSeller = (r.sellerName || '').toLowerCase().includes(q);
+            const inExp = r.explanation.toLowerCase().includes(q);
+            const inStock = (r.productStockNumber || '').toLowerCase().includes(q);
+            if (!inName && !inSeller && !inExp && !inStock) return false;
+          }
+          return true;
+        });
+
+        return (
+          <div className="space-y-6">
+            {/* Report Statistics Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Reports</span>
+                <div className="text-2xl font-black text-slate-900 mt-1">{totalReports}</div>
+                <span className="text-[10px] text-slate-500">Submitted in timeframe</span>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-amber-800 uppercase">Pending</span>
+                <div className="text-2xl font-black text-amber-900 mt-1">{pendingReports}</div>
+                <span className="text-[10px] text-amber-700">Awaiting triage</span>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-blue-800 uppercase">Under Review</span>
+                <div className="text-2xl font-black text-blue-900 mt-1">{underReviewReports}</div>
+                <span className="text-[10px] text-blue-700">Investigation active</span>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase">Resolved</span>
+                <div className="text-2xl font-black text-emerald-900 mt-1">{resolvedReports}</div>
+                <span className="text-[10px] text-emerald-700">Action taken / closed</span>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Dismissed</span>
+                <div className="text-2xl font-black text-slate-700 mt-1">{dismissedReports}</div>
+                <span className="text-[10px] text-slate-500">Invalid allegations</span>
+              </div>
+            </div>
+
+            {/* Most Reported Products Monitoring (Product Report Rate) */}
+            {mostReportedProducts.length > 0 && (
+              <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                    Product Report Rate & High-Frequency Monitoring
+                  </h3>
+                  <span className="text-[11px] text-slate-400">Reports represent allegations requiring admin investigation</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {mostReportedProducts.slice(0, 3).map(item => (
+                    <div key={item.productId} className={`p-3 rounded-2xl border text-xs flex items-center justify-between ${item.count >= 3 ? 'bg-red-50/60 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="space-y-0.5 truncate pr-2">
+                        <Link to={`/product/${item.productId}`} className="font-bold text-slate-900 hover:text-cu-blue flex items-center gap-1 truncate">
+                          <span>{item.name}</span>
+                          <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                        </Link>
+                        <div className="text-[11px] text-slate-500">
+                          {item.reporters.size} distinct reporter(s)
+                        </div>
+                      </div>
+                      <span className={`px-2 py-1 rounded-xl text-xs font-black ${item.count >= 3 ? 'bg-red-600 text-white' : 'bg-amber-200 text-amber-900'}`}>
+                        {item.count} report{item.count > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Filter Controls */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                <Search className="w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={reportSearch}
+                  onChange={e => setReportSearch(e.target.value)}
+                  placeholder="Search by product, seller, stock #, or keywords..."
+                  className="w-full px-3 py-1.5 border rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={reportFilterCat}
+                  onChange={e => setReportFilterCat(e.target.value)}
+                  className="px-3 py-1.5 border rounded-xl bg-white text-xs"
+                >
+                  <option value="All">All Categories</option>
+                  <option value="Scammer or fraudulent seller">Scammer / Fraud</option>
+                  <option value="Fake or counterfeit product">Fake / Counterfeit</option>
+                  <option value="Potentially stolen product">Potentially Stolen</option>
+                  <option value="Misleading product description or images">Misleading Info</option>
+                  <option value="Prohibited or inappropriate item">Prohibited / Inappropriate</option>
+                  <option value="Suspicious pricing or suspicious activity">Suspicious Activity</option>
+                  <option value="Other">Other</option>
+                </select>
+
+                <select
+                  value={reportFilterStatus}
+                  onChange={e => setReportFilterStatus(e.target.value)}
+                  className="px-3 py-1.5 border rounded-xl bg-white text-xs"
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="under_review">Under Review</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Reports Table */}
+            <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                  <tr>
+                    <th className="p-3">Report ID</th>
+                    <th className="p-3">Reported Product</th>
+                    <th className="p-3">Seller</th>
+                    <th className="p-3">Category</th>
+                    <th className="p-3">Explanation</th>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {filteredReports.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400">
+                        No product reports match the selected filters or timeframe.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredReports.map(rep => (
+                      <tr key={rep.reportId} className="hover:bg-slate-50/70 transition">
+                        <td className="p-3 font-mono text-[11px] text-slate-500">{rep.reportId}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            {rep.productImage ? (
+                              <img src={rep.productImage} alt="" className="w-8 h-8 rounded-lg object-cover bg-slate-100 flex-shrink-0" />
+                            ) : (
+                              <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400">📦</div>
+                            )}
+                            <div>
+                              <Link
+                                to={`/product/${rep.productId}`}
+                                className="font-bold text-slate-900 hover:text-cu-blue hover:underline flex items-center gap-1"
+                              >
+                                {rep.productName} <ExternalLink className="w-3 h-3 text-slate-400" />
+                              </Link>
+                              {rep.productStockNumber && (
+                                <div className="text-[10px] font-mono text-amber-700 flex items-center gap-0.5">
+                                  <Tag className="w-2.5 h-2.5" /> Stock #{rep.productStockNumber}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-3 text-slate-700">{rep.sellerName}</td>
+                        <td className="p-3">
+                          <span className="font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded text-[11px]">
+                            {rep.category}
+                          </span>
+                        </td>
+                        <td className="p-3 max-w-xs">
+                          <div className="text-slate-600 line-clamp-2" title={rep.explanation}>
+                            {rep.explanation}
+                          </div>
+                          {rep.adminNotes && (
+                            <div className="text-[10px] text-blue-700 bg-blue-50 p-1 rounded mt-1">
+                              <strong>Note:</strong> {rep.adminNotes}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-400 text-[11px] whitespace-nowrap">
+                          {new Date(rep.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap ${
+                            rep.status === 'pending' ? 'bg-amber-100 text-amber-800' :
+                            rep.status === 'under_review' ? 'bg-blue-100 text-blue-800' :
+                            rep.status === 'resolved' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            {rep.status.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex flex-wrap gap-1.5">
+                            {rep.status !== 'under_review' && rep.status !== 'resolved' && (
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateReportStatus(rep.reportId, 'under_review')}
+                                className="px-2 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded text-[10px] font-bold"
+                              >
+                                Review
+                              </button>
+                            )}
+                            {rep.status !== 'resolved' && (
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateReportStatus(rep.reportId, 'resolved')}
+                                className="px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-[10px] font-bold"
+                              >
+                                Resolve
+                              </button>
+                            )}
+                            {rep.status !== 'dismissed' && (
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateReportStatus(rep.reportId, 'dismissed')}
+                                className="px-2 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded text-[10px] font-semibold"
+                              >
+                                Dismiss
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleAdminRemoveFromReport(rep.productId, rep.productName)}
+                              className="px-2 py-1 bg-red-50 text-red-700 hover:bg-red-100 rounded text-[10px] font-bold flex items-center gap-0.5"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" /> Remove Item
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TAB 2: ACTIVE PRODUCTS (Soft Delete Action) */}
       {activeTab === 'products' && (

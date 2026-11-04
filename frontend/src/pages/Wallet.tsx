@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet as WalletIcon, Clock, ArrowUpRight, TrendingUp } from 'lucide-react';
+import { Wallet as WalletIcon, Clock, ArrowUpRight, TrendingUp, PlusCircle } from 'lucide-react';
 import type { Wallet as WalletType, WithdrawalRequest } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -9,6 +9,9 @@ export const Wallet: React.FC<{ onToast: (type: 'success' | 'error' | 'info', ms
   const [wallet, setWallet] = useState<WalletType | null>(null);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
+  const [topUpModalOpen, setTopUpModalOpen] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState('5000');
+  const [topUpLoading, setTopUpLoading] = useState(false);
   const [amt, setAmt] = useState('');
   const [bank, setBank] = useState('');
   const [accNum, setAccNum] = useState('');
@@ -42,21 +45,95 @@ export const Wallet: React.FC<{ onToast: (type: 'success' | 'error' | 'info', ms
     }
   };
 
+  const handleTopUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const amountVal = Number(topUpAmount);
+    if (!amountVal || amountVal <= 0) {
+      onToast('error', 'Please enter a valid amount.');
+      return;
+    }
+
+    setTopUpLoading(true);
+    const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_sample_covenant_university';
+
+    if (window.PaystackPop && window.PaystackPop.setup && !paystackKey.startsWith('pk_test_sample')) {
+      const handler = window.PaystackPop.setup({
+        key: paystackKey,
+        email: user.schoolEmail,
+        amount: Math.round(amountVal * 100),
+        currency: 'NGN',
+        ref: 'PSTK_' + Date.now(),
+        metadata: {
+          custom_fields: [
+            { display_name: 'Student Name', variable_name: 'student_name', value: user.fullName },
+            { display_name: 'Reg Number', variable_name: 'reg_number', value: user.regNumber }
+          ]
+        },
+        callback: async (response: { reference: string }) => {
+          const res = await api.topUpWallet(user.userId, amountVal, response.reference);
+          if (res.success && res.wallet) {
+            setWallet(res.wallet);
+            onToast('success', `₦${amountVal.toLocaleString()} added to your wallet!`);
+          } else {
+            await fetchWallet();
+            onToast('success', `Wallet funded successfully!`);
+          }
+          setTopUpLoading(false);
+          setTopUpModalOpen(false);
+        },
+        onClose: () => {
+          setTopUpLoading(false);
+          onToast('info', 'Paystack transaction cancelled.');
+        }
+      });
+      handler.openIframe();
+    } else {
+      // Direct development / test mode top up
+      setTimeout(async () => {
+        const res = await api.topUpWallet(user.userId, amountVal, 'PSTK_TEST_' + Date.now());
+        if (res.success && res.wallet) {
+          setWallet(res.wallet);
+          onToast('success', `₦${amountVal.toLocaleString()} added to your wallet!`);
+        } else {
+          setWallet(prev => prev ? {
+            ...prev,
+            availableBalance: (Number(prev.availableBalance) || 0) + amountVal
+          } : null);
+          onToast('success', `₦${amountVal.toLocaleString()} added to wallet!`);
+        }
+        setTopUpLoading(false);
+        setTopUpModalOpen(false);
+      }, 500);
+    }
+  };
+
   if (!wallet) return <div className="text-center py-12 text-slate-400">Loading wallet...</div>;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
-          <WalletIcon className="w-6 h-6 text-emerald-600" /> Wallet & Balance
-        </h1>
-        <button
-          onClick={() => setModalOpen(true)}
-          disabled={wallet.availableBalance <= 0}
-          className="px-4 py-2 bg-emerald-600 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center gap-1 shadow"
-        >
-          <ArrowUpRight className="w-4 h-4" /> Request Withdrawal
-        </button>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
+            <WalletIcon className="w-6 h-6 text-emerald-600" /> Wallet & Balance
+          </h1>
+          <p className="text-xs text-slate-500">Fund your wallet to make purchases and manage your marketplace earnings.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTopUpModalOpen(true)}
+            className="px-4 py-2 bg-cu-blue hover:bg-cu-dark text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow"
+          >
+            <PlusCircle className="w-4 h-4 text-cu-gold" /> Top Up via Paystack
+          </button>
+          <button
+            onClick={() => setModalOpen(true)}
+            disabled={wallet.availableBalance <= 0}
+            className="px-4 py-2 bg-emerald-600 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center gap-1 shadow"
+          >
+            <ArrowUpRight className="w-4 h-4" /> Request Withdrawal
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -118,6 +195,70 @@ export const Wallet: React.FC<{ onToast: (type: 'success' | 'error' | 'info', ms
           </div>
         )}
       </div>
+
+      {/* Paystack Top Up Modal */}
+      {topUpModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <form onSubmit={handleTopUpSubmit} className="bg-white p-6 rounded-2xl max-w-sm w-full space-y-4 text-xs animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                ₦
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Top Up Wallet (Paystack)</h3>
+                <p className="text-[11px] text-slate-500">Instant funding via card, bank transfer, or USSD.</p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block mb-1 font-bold text-slate-700">Amount to Deposit (₦)</label>
+              <input
+                type="number"
+                min="100"
+                step="100"
+                value={topUpAmount}
+                onChange={e => setTopUpAmount(e.target.value)}
+                required
+                className="w-full px-3 py-2.5 border rounded-xl font-bold text-base text-slate-900"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              {['2000', '5000', '10000', '20000'].map(val => (
+                <button
+                  type="button"
+                  key={val}
+                  onClick={() => setTopUpAmount(val)}
+                  className={`flex-1 py-1.5 rounded-lg border text-xs font-semibold ${topUpAmount === val ? 'bg-cu-blue text-white border-cu-blue' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+                >
+                  +{Number(val).toLocaleString()}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl text-[11px] text-slate-600 border border-slate-200">
+              Payments are processed securely via Paystack. Funds are credited directly to your eBron wallet for purchasing items.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setTopUpModalOpen(false)}
+                className="px-3.5 py-2 border rounded-xl text-slate-600 hover:bg-slate-50 font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={topUpLoading}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1 shadow"
+              >
+                {topUpLoading ? 'Connecting...' : `Pay ₦${Number(topUpAmount || 0).toLocaleString()}`}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">

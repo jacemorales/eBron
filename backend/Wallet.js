@@ -17,6 +17,26 @@ export function createInitialWallet(userId) {
   };
 }
 
+export function topUpAvailableBalance(wallet, amount) {
+  const num = Number(amount);
+  if (num <= 0) throw new Error('Top up amount must be positive.');
+  return {
+    ...wallet,
+    availableBalance: Number((Number(wallet.availableBalance || 0) + num).toFixed(2)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function deductAvailableBalance(wallet, amount) {
+  const num = Number(amount);
+  if (Number(wallet.availableBalance || 0) < num) throw new Error('Insufficient wallet balance.');
+  return {
+    ...wallet,
+    availableBalance: Number((Number(wallet.availableBalance || 0) - num).toFixed(2)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 export function creditPendingBalance(wallet, amount) {
   const num = Number(amount);
   return {

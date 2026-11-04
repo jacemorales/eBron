@@ -40,7 +40,7 @@ export const Profile: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
     });
 
     if (res.success) {
-      onToast('success', 'Profile information updated and saved in Google Sheets.');
+      onToast('success', 'Profile information updated successfully.');
       setIsEditing(false);
     } else {
       onToast('error', res.error || 'Failed to update profile.');
@@ -156,7 +156,7 @@ export const Profile: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
               disabled={saving}
               className="px-5 py-2 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue font-black rounded-xl text-xs shadow transition flex items-center gap-1.5"
             >
-              <Save className="w-4 h-4" /> {saving ? 'Saving Changes...' : 'Save to Google Sheets'}
+              <Save className="w-4 h-4" /> {saving ? 'Saving Changes...' : 'Save Changes'}
             </button>
           </div>
         </form>

@@ -72,9 +72,9 @@ The primary database is Google Sheets. You can either use the automatic setup fu
   `userId`, `fullName`, `regNumber`, `matricNumber`, `schoolEmail`, `gender`, `hallOfResidence`, `roomNumber`, `passwordHash`, `salt`, `role`, `status`, `createdAt`, `updatedAt`
 
 ### Sheet 2: `Products`
-- **Purpose**: Marketplace listings with images, descriptions, pricing, and soft-delete flags.
+- **Purpose**: Marketplace listings with images, descriptions, pricing, optional stock number, and soft-delete flags.
 - **Columns (in exact order)**:
-  `productId`, `sellerId`, `sellerName`, `sellerEmail`, `name`, `description`, `category`, `price`, `condition`, `primaryImageUrl`, `images`, `availability`, `status`, `viewsCount`, `deletedBy`, `deletedAt`, `createdAt`, `updatedAt`
+  `productId`, `sellerId`, `sellerName`, `sellerEmail`, `name`, `description`, `category`, `price`, `condition`, `stockNumber`, `primaryImageUrl`, `images`, `availability`, `status`, `viewsCount`, `deletedBy`, `deletedAt`, `createdAt`, `updatedAt`
 
 ### Sheet 3: `SavedItems`
 - **Purpose**: Student wishlists and bookmarked products.
@@ -106,7 +106,12 @@ The primary database is Google Sheets. You can either use the automatic setup fu
 - **Columns (in exact order)**:
   `requestId`, `userId`, `userName`, `userEmail`, `amount`, `bankName`, `accountNumber`, `accountName`, `status`, `adminNotes`, `processedAt`, `createdAt`
 
-### Sheet 9: `AnalyticsEvents`
+### Sheet 9: `Reports`
+- **Purpose**: Product listing complaints and moderation reports submitted by students for administrator investigation.
+- **Columns (in exact order)**:
+  `reportId`, `productId`, `productName`, `productStockNumber`, `productImage`, `sellerId`, `sellerName`, `reporterId`, `reporterEmail`, `category`, `explanation`, `status`, `adminNotes`, `createdAt`, `updatedAt`
+
+### Sheet 10: `AnalyticsEvents`
 - **Purpose**: Historical timestamp logs for platform events and analytics tracking.
 - **Columns (in exact order)**:
   `eventId`, `eventType`, `userId`, `amount`, `details`, `createdAt`

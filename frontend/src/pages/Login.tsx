@@ -23,7 +23,7 @@ export const Login: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg
       onToast('success', 'Logged in successfully!');
       navigate(redirectPath);
     } else {
-      const err = res.error || 'Login failed. Please verify credentials or Google Sheets backend configuration.';
+      const err = res.error || 'Login failed. Please verify credentials or network connection.';
       setErrorMsg(err);
       onToast('error', err);
     }
@@ -56,7 +56,7 @@ export const Login: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
-              placeholder="firstname.lastname@stu.cu.edu.ng"
+              placeholder="email@stu.cu.edu.ng"
               className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:border-cu-blue"
             />
           </div>
@@ -68,6 +68,7 @@ export const Login: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
+              placeholder="Enter your password"
               className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:border-cu-blue"
             />
           </div>
@@ -77,7 +78,7 @@ export const Login: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg
             disabled={submitting}
             className="w-full py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue font-extrabold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1.5"
           >
-            <LogIn className="w-4 h-4" /> {submitting ? 'Authenticating with Google Sheets...' : 'Sign In'}
+            <LogIn className="w-4 h-4" /> {submitting ? 'Authenticating...' : 'Sign In'}
           </button>
         </form>
 

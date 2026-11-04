@@ -8,7 +8,7 @@ export const ORDER_STATUS = {
   DISPUTED: 'disputed'
 };
 
-export function validateOrderCreation(buyer, product, deliveryInfo) {
+export function validateOrderCreation(buyer, product, deliveryInfo, buyerWallet = null) {
   const errors = [];
   if (!buyer) errors.push('Buyer must be logged in.');
   if (!product) errors.push('Product does not exist.');
@@ -17,6 +17,10 @@ export function validateOrderCreation(buyer, product, deliveryInfo) {
   if (product && product.sellerId === buyer?.userId) errors.push('You cannot purchase your own product.');
   if (!deliveryInfo || !deliveryInfo.fullName || !deliveryInfo.gender || !deliveryInfo.hallOfResidence || !deliveryInfo.roomNumber) {
     errors.push('Complete delivery information is required.');
+  }
+  if (buyerWallet && Number(buyerWallet.availableBalance || 0) < Number(product?.price || 0)) {
+    const deficit = Number(product?.price || 0) - Number(buyerWallet.availableBalance || 0);
+    errors.push(`Insufficient wallet balance. You need ₦${deficit.toLocaleString()} more. Please top up your wallet via Paystack.`);
   }
   return { valid: errors.length === 0, errors };
 }

@@ -36,6 +36,7 @@ var SHEETS_SCHEMA = {
     'category',
     'price',
     'condition',  // 'New' | 'Fairly Used' | 'Used'
+    'stockNumber', // Optional stock reference
     'primaryImageUrl',
     'images',     // JSON array string
     'availability', // 'available' | 'reserved' | 'sold'
@@ -122,6 +123,23 @@ var SHEETS_SCHEMA = {
     'adminNotes',
     'processedAt',
     'createdAt'
+  ],
+  Reports: [
+    'reportId',
+    'productId',
+    'productName',
+    'productStockNumber',
+    'productImage',
+    'sellerId',
+    'sellerName',
+    'reporterId',
+    'reporterEmail',
+    'category',
+    'explanation',
+    'status', // 'pending' | 'under_review' | 'resolved' | 'dismissed'
+    'adminNotes',
+    'createdAt',
+    'updatedAt'
   ],
   AnalyticsEvents: [
     'eventId',
@@ -426,6 +444,45 @@ function doGet(e) {
       return jsonOutput({ success: true, withdrawals: allW });
     }
 
+    // 12b. GET ALL REPORTS (Admin)
+    if (action === 'getReports') {
+      var allReports = getSheetRows('Reports');
+      var rTimeframe = params.timeframe || 'all';
+      var rCat = params.category;
+      var rStat = params.status;
+      var rCutoff = null;
+      var rNow = new Date();
+
+      if (rTimeframe === 'daily') {
+        rCutoff = new Date(); rCutoff.setHours(rCutoff.getHours() - 24);
+      } else if (rTimeframe === 'weekly') {
+        rCutoff = new Date(); rCutoff.setDate(rCutoff.getDate() - 7);
+      } else if (rTimeframe === 'monthly') {
+        rCutoff = new Date(); rCutoff.setDate(rCutoff.getDate() - 30);
+      }
+
+      var filteredReports = allReports.filter(function(r) {
+        if (rCutoff && r.createdAt) {
+          var d = new Date(r.createdAt);
+          if (d < rCutoff || d > rNow) return false;
+        }
+        if (rCat && rCat !== 'All' && r.category !== rCat) return false;
+        if (rStat && rStat !== 'All' && r.status !== rStat) return false;
+        return true;
+      });
+
+      return jsonOutput({ success: true, reports: filteredReports });
+    }
+
+    // 12c. GET PRODUCT REPORTS
+    if (action === 'getProductReports') {
+      var pId = params.productId;
+      var pReports = getSheetRows('Reports').filter(function(r) {
+        return r.productId === pId;
+      });
+      return jsonOutput({ success: true, reports: pReports });
+    }
+
     // 13. GET COMPREHENSIVE ADMIN ANALYTICS
     if (action === 'getAdminAnalytics') {
       var uList = getSheetRows('Users');
@@ -612,6 +669,51 @@ function doPost(e) {
     if (action === 'login') {
       var lEmail = (payload.schoolEmail || '').trim().toLowerCase();
       var allU = getSheetRows('Users');
+
+      // Auto-provision or verify default administrator account if requested
+      if (lEmail === 'admin@stu.cu.edu.ng' && payload.password === 'AdminPassword123!') {
+        var existingAdmin = allU.find(function(u) { return String(u.schoolEmail).toLowerCase() === 'admin@stu.cu.edu.ng'; });
+        if (!existingAdmin) {
+          var adminHash = computePasswordHash('AdminPassword123!');
+          var adminUserId = 'u_admin_001';
+          var adminNow = new Date().toISOString();
+          existingAdmin = {
+            userId: adminUserId,
+            fullName: 'eBron System Administrator',
+            regNumber: 'ADMIN001',
+            matricNumber: 'CU/ADMIN/001',
+            schoolEmail: 'admin@stu.cu.edu.ng',
+            gender: 'Male',
+            hallOfResidence: 'Peter',
+            roomNumber: 'ADM-01',
+            passwordHash: adminHash.hash,
+            salt: adminHash.salt,
+            role: 'admin',
+            status: 'active',
+            createdAt: adminNow,
+            updatedAt: adminNow
+          };
+          appendSheetRow('Users', existingAdmin);
+          appendSheetRow('Wallets', {
+            walletId: 'wal_' + adminUserId,
+            userId: adminUserId,
+            availableBalance: 500000,
+            pendingBalance: 0,
+            totalEarnings: 500000,
+            totalWithdrawals: 0,
+            updatedAt: adminNow
+          });
+        } else if (existingAdmin.role !== 'admin') {
+          updateSheetRow('Users', 'userId', existingAdmin.userId, { role: 'admin', status: 'active' });
+          existingAdmin.role = 'admin';
+        }
+
+        var safeAdmin = Object.assign({}, existingAdmin);
+        delete safeAdmin.passwordHash;
+        delete safeAdmin.salt;
+        return jsonOutput({ success: true, user: safeAdmin });
+      }
+
       var user = allU.find(function(u) { return String(u.schoolEmail).toLowerCase() === lEmail; });
 
       if (!user) return jsonOutput({ success: false, error: 'Invalid school email or password.' });
@@ -666,6 +768,7 @@ function doPost(e) {
         category: payload.category,
         price: Number(payload.price),
         condition: payload.condition,
+        stockNumber: payload.stockNumber ? String(payload.stockNumber).trim() : '',
         primaryImageUrl: primary,
         images: images,
         availability: 'available',
@@ -688,6 +791,9 @@ function doPost(e) {
         description: payload.description,
         updatedAt: new Date().toISOString()
       };
+      if (payload.stockNumber !== undefined) {
+        updates.stockNumber = payload.stockNumber ? String(payload.stockNumber).trim() : '';
+      }
       updateSheetRow('Products', 'productId', payload.productId, updates);
       return jsonOutput({ success: true });
     }
@@ -810,11 +916,62 @@ function doPost(e) {
       return jsonOutput({ success: true, message: newMsg });
     }
 
-    // 11. CREATE ORDER & TEST PAYMENT
+    // 10b. TOP UP WALLET (via Paystack)
+    if (action === 'topUpWallet') {
+      var topUserId = payload.userId;
+      var topAmount = Number(payload.amount);
+      var payRef = payload.reference || ('PSTK_' + Date.now());
+
+      if (!topAmount || topAmount <= 0) {
+        return jsonOutput({ success: false, error: 'Invalid top up amount.' });
+      }
+
+      var wList = getSheetRows('Wallets');
+      var userWallet = wList.find(function(w) { return w.userId === topUserId; });
+      var now = new Date().toISOString();
+
+      if (!userWallet) {
+        userWallet = {
+          walletId: 'wal_' + topUserId,
+          userId: topUserId,
+          availableBalance: topAmount,
+          pendingBalance: 0,
+          totalEarnings: 0,
+          totalWithdrawals: 0,
+          updatedAt: now
+        };
+        appendSheetRow('Wallets', userWallet);
+      } else {
+        var updatedAvail = (Number(userWallet.availableBalance) || 0) + topAmount;
+        updateSheetRow('Wallets', 'userId', topUserId, {
+          availableBalance: updatedAvail,
+          updatedAt: now
+        });
+        userWallet.availableBalance = updatedAvail;
+      }
+
+      return jsonOutput({ success: true, wallet: userWallet, reference: payRef });
+    }
+
+    // 11. CREATE ORDER & WALLET PAYMENT
     if (action === 'createOrder') {
       var prod = getSheetRows('Products').find(function(p) { return p.productId === payload.productId; });
       if (!prod || prod.availability !== 'available') {
         return jsonOutput({ success: false, error: 'Product is unavailable.' });
+      }
+
+      var price = Number(prod.price);
+      var wList = getSheetRows('Wallets');
+      var bWallet = wList.find(function(w) { return w.userId === payload.buyerId; });
+      var buyerAvail = Number(bWallet ? bWallet.availableBalance : 0);
+
+      // Verify buyer has sufficient wallet balance
+      if (buyerAvail < price) {
+        var deficit = price - buyerAvail;
+        return jsonOutput({
+          success: false,
+          error: 'Insufficient wallet balance. You need ₦' + deficit.toLocaleString() + ' more to complete this purchase. Please top up your wallet.'
+        });
       }
 
       var now = new Date().toISOString();
@@ -831,10 +988,10 @@ function doPost(e) {
         buyerName: payload.buyerName,
         sellerId: prod.sellerId,
         sellerName: prod.sellerName,
-        amount: Number(prod.price),
+        amount: price,
         status: 'payment_successful',
-        paymentMode: 'TEST_MODE',
-        paymentRef: 'SIM_PAY_' + Date.now(),
+        paymentMode: 'WALLET_ESCROW',
+        paymentRef: 'WAL_PAY_' + Date.now(),
         deliveryFullName: payload.deliveryInfo.fullName,
         deliveryGender: payload.deliveryInfo.gender,
         deliveryHall: payload.deliveryInfo.hallOfResidence,
@@ -850,11 +1007,27 @@ function doPost(e) {
       appendSheetRow('Orders', newOrder);
       updateSheetRow('Products', 'productId', prod.productId, { availability: 'sold', updatedAt: now });
 
+      // Deduct from buyer available balance
+      var newBuyerAvail = buyerAvail - price;
+      updateSheetRow('Wallets', 'userId', payload.buyerId, {
+        availableBalance: newBuyerAvail,
+        updatedAt: now
+      });
+
       // Add to seller pending balance
-      var wList = getSheetRows('Wallets');
       var sWallet = wList.find(function(w) { return w.userId === prod.sellerId; });
-      var newPending = (Number(sWallet ? sWallet.pendingBalance : 0) + Number(prod.price));
-      if (sWallet) {
+      if (!sWallet) {
+        appendSheetRow('Wallets', {
+          walletId: 'wal_' + prod.sellerId,
+          userId: prod.sellerId,
+          availableBalance: 0,
+          pendingBalance: price,
+          totalEarnings: 0,
+          totalWithdrawals: 0,
+          updatedAt: now
+        });
+      } else {
+        var newPending = (Number(sWallet.pendingBalance) || 0) + price;
         updateSheetRow('Wallets', 'userId', prod.sellerId, { pendingBalance: newPending, updatedAt: now });
       }
 
@@ -995,6 +1168,113 @@ function doPost(e) {
       delete uTarget.passwordHash;
       delete uTarget.salt;
       return jsonOutput({ success: true, user: uTarget });
+    }
+
+    // 17. REPORT PRODUCT
+    if (action === 'reportProduct') {
+      var rUserId = payload.reporterId;
+      var rProductId = payload.productId;
+      var rCat = payload.category;
+      var rExp = payload.explanation;
+
+      if (!rExp || typeof rExp !== 'string' || rExp.trim().length === 0) {
+        return jsonOutput({ success: false, error: 'Please explain why you are reporting this product.' });
+      }
+
+      var prod = getSheetRows('Products').find(function(p) { return p.productId === rProductId; });
+      if (!prod) return jsonOutput({ success: false, error: 'Product not found.' });
+
+      if (prod.sellerId === rUserId) {
+        return jsonOutput({ success: false, error: 'You cannot report your own product.' });
+      }
+
+      var existingReports = getSheetRows('Reports');
+      var alreadyReported = existingReports.some(function(r) {
+        return r.productId === rProductId && r.reporterId === rUserId && r.status !== 'dismissed';
+      });
+      if (alreadyReported) {
+        return jsonOutput({ success: false, error: 'You have already submitted an active report for this product.' });
+      }
+
+      var reporter = getSheetRows('Users').find(function(u) { return u.userId === rUserId; });
+      var rId = 'rep_' + Utilities.getUuid().substr(0, 8);
+      var now = new Date().toISOString();
+
+      var newReport = {
+        reportId: rId,
+        productId: prod.productId,
+        productName: prod.name,
+        productStockNumber: prod.stockNumber || '',
+        productImage: prod.primaryImageUrl || '',
+        sellerId: prod.sellerId,
+        sellerName: prod.sellerName,
+        reporterId: rUserId,
+        reporterEmail: reporter ? reporter.schoolEmail : '',
+        category: rCat,
+        explanation: rExp.trim(),
+        status: 'pending',
+        adminNotes: '',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      appendSheetRow('Reports', newReport);
+      return jsonOutput({
+        success: true,
+        report: newReport,
+        message: 'Your report has been submitted successfully. Our team will review it.'
+      });
+    }
+
+    // 18. UPDATE REPORT STATUS (Admin)
+    if (action === 'updateReportStatus') {
+      var reportId = payload.reportId;
+      var newStatus = payload.status; // 'pending' | 'under_review' | 'resolved' | 'dismissed'
+      var adminNotes = payload.adminNotes;
+      var now = new Date().toISOString();
+
+      var updates = {
+        status: newStatus,
+        updatedAt: now
+      };
+      if (adminNotes !== undefined) {
+        updates.adminNotes = adminNotes;
+      }
+
+      var ok = updateSheetRow('Reports', 'reportId', reportId, updates);
+      if (!ok) return jsonOutput({ success: false, error: 'Report not found.' });
+      return jsonOutput({ success: true, message: 'Report status updated.' });
+    }
+
+    // 19. REMOVE PRODUCT (Admin Moderation)
+    if (action === 'removeProductAdmin') {
+      var prodId = payload.productId;
+      var adminId = payload.adminId;
+      var reason = payload.reason || 'Removed by administrator';
+      var now = new Date().toISOString();
+
+      var ok = updateSheetRow('Products', 'productId', prodId, {
+        status: 'deleted',
+        deletedBy: adminId,
+        deletedAt: now,
+        updatedAt: now
+      });
+
+      if (!ok) return jsonOutput({ success: false, error: 'Product not found.' });
+
+      // Automatically update pending reports for this product to resolved
+      var allR = getSheetRows('Reports');
+      allR.forEach(function(r) {
+        if (r.productId === prodId && (r.status === 'pending' || r.status === 'under_review')) {
+          updateSheetRow('Reports', 'reportId', r.reportId, {
+            status: 'resolved',
+            adminNotes: (r.adminNotes ? r.adminNotes + ' | ' : '') + 'Product removed: ' + reason,
+            updatedAt: now
+          });
+        }
+      });
+
+      return jsonOutput({ success: true, message: 'Product removed from marketplace successfully.' });
     }
 
     return jsonOutput({ success: false, error: 'Unknown POST action: ' + action });

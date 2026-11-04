@@ -24,6 +24,7 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
   const [category, setCategory] = useState<ProductCategory>('Textbooks & Academic');
   const [price, setPrice] = useState('');
   const [condition, setCondition] = useState<ProductCondition>('Fairly Used');
+  const [stockNumber, setStockNumber] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [primaryIndex, setPrimaryIndex] = useState(0);
   const [urlInput, setUrlInput] = useState('');
@@ -53,6 +54,7 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
       category,
       price: Number(price),
       condition,
+      stockNumber: stockNumber.trim() || undefined,
       images,
       primaryIndex
     });
@@ -94,6 +96,23 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
             <label className="block font-bold mb-1">Price (₦)</label>
             <input type="number" value={price} onChange={e => setPrice(e.target.value)} required placeholder="5000" className="w-full px-3 py-2 border rounded-xl font-bold" />
           </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block font-bold">Stock Number (Optional)</label>
+            <span className="text-[10px] text-slate-400 font-semibold">Optional reference</span>
+          </div>
+          <input
+            type="text"
+            value={stockNumber}
+            onChange={e => setStockNumber(e.target.value)}
+            placeholder="e.g. STK-1004 or SKU-A02"
+            className="w-full px-3 py-2 border rounded-xl font-mono text-xs focus:border-cu-blue"
+          />
+          <p className="text-[10px] text-slate-400 mt-1">
+            Enter a unique inventory or stock reference code if you use one. Leave blank if not applicable.
+          </p>
         </div>
 
         <div>

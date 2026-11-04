@@ -28,6 +28,7 @@ var SHEETS_SCHEMA = {
     'category',
     'price',
     'condition', // 'New' | 'Fairly Used' | 'Used'
+    'stockNumber', // Optional stock reference
     'primaryImageUrl',
     'availability', // 'available' | 'sold' | 'reserved'
     'status', // 'active' | 'deleted' (soft delete)
@@ -132,14 +133,20 @@ var SHEETS_SCHEMA = {
   ],
   Reports: [
     'reportId',
+    'productId',
+    'productName',
+    'productStockNumber',
+    'productImage',
+    'sellerId',
+    'sellerName',
     'reporterId',
-    'targetType', // 'product' | 'order' | 'user'
-    'targetId',
-    'reason',
-    'details',
-    'status', // 'pending' | 'resolved' | 'dismissed'
+    'reporterEmail',
+    'category',
+    'explanation',
+    'status', // 'pending' | 'under_review' | 'resolved' | 'dismissed'
     'adminNotes',
-    'createdAt'
+    'createdAt',
+    'updatedAt'
   ],
   AdminLogs: [
     'logId',

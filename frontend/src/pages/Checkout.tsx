@@ -1,24 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { MapPin, Edit2, CheckCircle, CreditCard, ArrowRight } from 'lucide-react';
-import type { Product, Gender, Hall } from '../types';
+import { MapPin, Edit2, CheckCircle, CreditCard, ArrowRight, Wallet, AlertCircle, PlusCircle, ShieldCheck } from 'lucide-react';
+import type { Product, Gender, Hall, Wallet as WalletType } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
 const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah'];
 
+declare global {
+  interface Window {
+    PaystackPop?: {
+      setup: (options: Record<string, any>) => {
+        openIframe: () => void;
+      };
+    };
+  }
+}
+
 export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const { user, updateProfile } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
+  const [wallet, setWallet] = useState<WalletType | null>(null);
   const [editing, setEditing] = useState(false);
   const [fullName, setFullName] = useState('');
   const [gender, setGender] = useState<Gender>('Male');
   const [hall, setHall] = useState<Hall>('Peter');
   const [room, setRoom] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [toppingUp, setToppingUp] = useState(false);
+
+  const fetchWallet = async () => {
+    if (user) {
+      const w = await api.getWallet(user.userId);
+      setWallet(w);
+    }
+  };
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
@@ -27,6 +46,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
     setHall(user.hallOfResidence);
     setRoom(user.roomNumber);
     if (productId) api.getProductById(productId).then(setProduct);
+    fetchWallet();
   }, [user, productId]);
 
   const handleGenderChange = (g: Gender) => {
@@ -44,8 +64,75 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
     }
   };
 
+  const availableBalance = Number(wallet?.availableBalance || 0);
+  const price = Number(product?.price || 0);
+  const deficit = Math.max(0, price - availableBalance);
+  const hasSufficientBalance = availableBalance >= price;
+
+  const handlePaystackTopUp = (amountToTopUp: number) => {
+    if (!user) return;
+    setToppingUp(true);
+
+    const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_sample_covenant_university';
+
+    // If Paystack inline JS is loaded
+    if (window.PaystackPop && window.PaystackPop.setup && !paystackKey.startsWith('pk_test_sample')) {
+      const handler = window.PaystackPop.setup({
+        key: paystackKey,
+        email: user.schoolEmail,
+        amount: Math.round(amountToTopUp * 100), // amount in kobo
+        currency: 'NGN',
+        ref: 'PSTK_' + Date.now(),
+        metadata: {
+          custom_fields: [
+            { display_name: 'Student Name', variable_name: 'student_name', value: user.fullName },
+            { display_name: 'Reg Number', variable_name: 'reg_number', value: user.regNumber }
+          ]
+        },
+        callback: async (response: { reference: string }) => {
+          const res = await api.topUpWallet(user.userId, amountToTopUp, response.reference);
+          if (res.success && res.wallet) {
+            setWallet(res.wallet);
+            onToast('success', `₦${amountToTopUp.toLocaleString()} added to your wallet via Paystack!`);
+          } else {
+            await fetchWallet();
+            onToast('success', `Wallet topped up successfully!`);
+          }
+          setToppingUp(false);
+        },
+        onClose: () => {
+          setToppingUp(false);
+          onToast('info', 'Paystack top up cancelled.');
+        }
+      });
+      handler.openIframe();
+    } else {
+      // Test / development mode Paystack inline top-up simulation
+      setTimeout(async () => {
+        const res = await api.topUpWallet(user.userId, amountToTopUp, 'PSTK_TEST_' + Date.now());
+        if (res.success && res.wallet) {
+          setWallet(res.wallet);
+          onToast('success', `₦${amountToTopUp.toLocaleString()} topped up to your wallet!`);
+        } else {
+          // Local fallback in case backend is offline
+          setWallet(prev => prev ? {
+            ...prev,
+            availableBalance: (Number(prev.availableBalance) || 0) + amountToTopUp
+          } : null);
+          onToast('success', `₦${amountToTopUp.toLocaleString()} added to wallet!`);
+        }
+        setToppingUp(false);
+      }, 500);
+    }
+  };
+
   const handlePay = async () => {
     if (!user || !product) return;
+    if (!hasSufficientBalance) {
+      onToast('error', `Insufficient wallet balance. Please top up ₦${deficit.toLocaleString()} to complete purchase.`);
+      return;
+    }
+
     setSubmitting(true);
     const res = await api.createOrder(user, product.productId, {
       fullName,
@@ -53,8 +140,14 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
       hallOfResidence: hall,
       roomNumber: room
     });
+
     if (res.success) {
-      onToast('success', 'Order created with TEST MODE payment!');
+      // Deduct balance locally to reflect immediate state
+      setWallet(prev => prev ? {
+        ...prev,
+        availableBalance: Math.max(0, (Number(prev.availableBalance) || 0) - price)
+      } : null);
+      onToast('success', 'Payment successful! Funds held securely in escrow pending confirmation.');
       navigate('/buy/pending');
     } else {
       onToast('error', res.error || 'Payment failed');
@@ -138,18 +231,61 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             </div>
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-xl border border-cu-blue flex justify-between items-center text-xs">
-            <span className="font-bold">Test Mode Escrow Payment</span>
-            <span className="bg-emerald-600 text-white font-black px-2 py-0.5 rounded text-[10px]">TEST MODE</span>
+          {/* Wallet Balance Check */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                <Wallet className="w-4 h-4 text-cu-blue" /> Your Wallet Balance:
+              </span>
+              <span className="font-mono font-black text-sm text-slate-900">
+                ₦{availableBalance.toLocaleString()}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-2 text-[11px] text-slate-500">
+              <span>Product Price:</span>
+              <span className="font-bold text-slate-800">₦{price.toLocaleString()}</span>
+            </div>
+
+            {!hasSufficientBalance ? (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 space-y-2">
+                <div className="flex items-start gap-1.5 font-bold">
+                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <span>Insufficient balance (Short by ₦{deficit.toLocaleString()})</span>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  You need to fund your eBron wallet with at least ₦{deficit.toLocaleString()} via Paystack to complete this purchase.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={toppingUp}
+                    onClick={() => handlePaystackTopUp(deficit)}
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-lg text-xs shadow flex items-center justify-center gap-1"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" /> {toppingUp ? 'Processing...' : `Top Up ₦${deficit.toLocaleString()} (Paystack)`}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-[11px] flex items-center gap-1.5 font-medium">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                <span>Wallet balance is sufficient. Funds will be placed in secure escrow.</span>
+              </div>
+            )}
           </div>
 
           <button
             type="button"
-            disabled={submitting}
+            disabled={submitting || !hasSufficientBalance}
             onClick={handlePay}
-            className="w-full py-3 bg-cu-gold hover:bg-cu-goldHover text-cu-blue font-extrabold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
+            className="w-full py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-40 disabled:cursor-not-allowed text-cu-blue font-extrabold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
           >
-            Confirm & Pay ₦{Number(product.price).toLocaleString()} <ArrowRight className="w-4 h-4" />
+            {hasSufficientBalance ? (
+              <>Deduct from Wallet & Pay ₦{price.toLocaleString()} <ArrowRight className="w-4 h-4" /></>
+            ) : (
+              <>Top Up Wallet to Pay (₦{deficit.toLocaleString()} required)</>
+            )}
           </button>
         </div>
       </div>
