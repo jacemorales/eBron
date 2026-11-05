@@ -1045,27 +1045,29 @@ function doPost(e) {
       return jsonOutput({ success: true });
     }
 
-    // 9. TOGGLE SAVE ITEM
+    // 9. TOGGLE SAVE ITEM (Strictly prevents duplicate saves for the same user and item)
     if (action === 'toggleSaveItem') {
       var saved = getSheetRows('SavedItems');
-      var match = saved.find(function(s) {
+      var matches = saved.filter(function(s) {
         return s.userId === payload.userId && s.productId === payload.productId;
       });
 
-      if (match) {
-        // Unsave
+      if (matches.length > 0) {
+        // Unsave: remove any matching rows to guarantee no duplicates remain
         var ss = getDb();
         var sSheet = ss.getSheetByName('SavedItems');
         var data = sSheet.getDataRange().getValues();
-        for (var i = 1; i < data.length; i++) {
-          if (data[i][0] === match.savedId) {
+        // Delete in reverse order to keep row indices valid
+        for (var i = data.length - 1; i >= 1; i--) {
+          var rowSavedId = data[i][0];
+          var isMatch = matches.some(function(m) { return m.savedId === rowSavedId; });
+          if (isMatch) {
             sSheet.deleteRow(i + 1);
-            break;
           }
         }
         return jsonOutput({ success: true, isSaved: false });
       } else {
-        // Save
+        // Save: append single entry
         appendSheetRow('SavedItems', {
           savedId: 'sav_' + Utilities.getUuid().substr(0, 8),
           userId: payload.userId,

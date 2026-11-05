@@ -89,23 +89,8 @@ export const ProductCard: React.FC<{
             {product.condition}
           </span>
 
-          {/* Direct visible bookmark/save button in top corner */}
-          <button
-            type="button"
-            disabled={saving}
-            title={isSaved ? "Remove from saved" : "Save item"}
-            aria-label={isSaved ? "Remove from saved" : "Save item"}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleToggleSave();
-            }}
-            className="absolute top-2 right-10 p-1.5 rounded-full bg-white/90 backdrop-blur-sm shadow hover:bg-white text-slate-600 hover:text-cu-gold transition"
-          >
-            <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-cu-gold text-cu-gold' : 'text-slate-600'}`} />
-          </button>
-
-          {/* Three-dot contextual menu */}
-          <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full shadow-sm">
+          {/* Three-dot contextual menu with Save, View, and Chat */}
+          <div className="absolute top-2.5 right-2.5 bg-white/95 backdrop-blur-sm rounded-full shadow-sm hover:shadow transition">
             <ActionMenu items={menuItems} ariaLabel={`Actions for ${product.name}`} />
           </div>
 

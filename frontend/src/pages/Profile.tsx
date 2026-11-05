@@ -5,7 +5,7 @@ import type { Gender, Hall } from '../types';
 import { requestNotificationPermissionAndSubscribe, isIosDevice, isStandalonePwa } from '../utils/pushNotifications';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
-const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah'];
+const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah', 'Dorcas'];
 
 export const Profile: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { user, updateProfile } = useAuth();

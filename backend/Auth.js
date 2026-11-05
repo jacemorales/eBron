@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 export const VALID_HALLS = {
   Male: ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'],
-  Female: ['Mary', 'Lydia', 'Deborah']
+  Female: ['Mary', 'Lydia', 'Deborah', 'Dorcas']
 };
 
 export const SCHOOL_EMAIL_SUFFIX = '@stu.cu.edu.ng';

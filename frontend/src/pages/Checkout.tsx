@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { TopUpModal } from '../components/TopUpModal';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
-const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah'];
+const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah', 'Dorcas'];
 
 export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { productId } = useParams<{ productId: string }>();

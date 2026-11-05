@@ -77,7 +77,11 @@ The primary database is Google Sheets. You can either run the automatic `setupDa
 - **Purpose**: Stores student and administrator credentials, profiles, hall assignments, and authorization roles.
 - **Columns (in exact order)**:
   `userId`, `fullName`, `regNumber`, `matricNumber`, `schoolEmail`, `gender`, `hallOfResidence`, `roomNumber`, `passwordHash`, `salt`, `role`, `status`, `createdAt`, `updatedAt`
-- **Notes**: `role` can be `student` or `admin`. Passwords are encrypted with PBKDF2/SHA-256 and unique salts; plaintext passwords are never stored.
+- **Why the `salt` column is critical**:
+  In a university marketplace handling payments and student identity, passwords must never be stored as simple hashes. A **cryptographic salt** is a unique, cryptographically random string generated per-account. When combined with the student's password prior to SHA-256 hashing (`SHA-256(password + salt)`), it guarantees:
+  1. Identical passwords chosen by different students generate completely different hashes.
+  2. Pre-computed rainbow tables and brute-force dictionary attacks are rendered completely useless.
+  3. Safe verification: the server retrieves the user's salt, hashes the incoming password attempt, and compares hashes without ever revealing or storing plaintext passwords.
 
 ### Sheet 2: `Products`
 - **Purpose**: Marketplace product catalog with pricing, condition, availability, and soft-delete flags.
@@ -261,6 +265,32 @@ When uploading multiple product images, sellers can either paste valid image URL
 - **Cause**: Wallet queries failing due to nonexistent wallet records in new user accounts.
 - **Solution**:
   `doGet` in `backend/Code.gs` automatically creates and appends an empty wallet record with 0 available and pending balances if one does not exist for the queried user ID.
+
+### Error 6: CSP Report-Only Notices & Third-Party Telemetry (Paystack, PostHog, Google Tag Manager)
+- **Symptoms**:
+  ```
+  [Report Only] Refused to connect to '<URL>' because it violates the following Content Security Policy directive: "connect-src 'none'".
+  [Report Only] Refused to load the script 'https://checkout.paystack.com/...' because it violates the following Content Security Policy directive: "script-src 'unsafe-inline' 'unsafe-eval'".
+  ```
+- **Cause**:
+  1. **"[Report Only]" Warnings**: These are browser diagnostic notices issued when sandbox containers, browser extensions, or local proxy servers inject a `Content-Security-Policy-Report-Only` header. Because it is **Report Only**, the browser does not block actual requests; it merely logs telemetry warnings.
+  2. **Third-Party Paystack Subresources**: Paystack's inline checkout (`https://js.paystack.co/v1/inline.js`) internally opens a secure checkout iframe that initiates heartbeat and integrity checks to `checkout.paystack.com`, `s3-eu-west-1.amazonaws.com`, and related domains.
+  3. **Analytics / Telemetry**: Third-party monitoring scripts (such as PostHog or Google Tag Manager) attempt to send diagnostics to their endpoints (`eu.i.posthog.com`, `www.googletagmanager.com`).
+- **How to configure your environment to avoid encountering these errors**:
+  1. **Do not restrict `connect-src` or `script-src` to `'none'`**: Ensure your web server (Nginx, Apache, or hosting provider such as Vercel, Netlify, or Cloudflare) does not emit `connect-src 'none'` or restrictive report-only policies.
+  2. **Production CSP Header**: When deploying behind a custom Content Security Policy, use the following policy headers to allow all eBron, Google Apps Script, and Paystack functionality:
+     ```http
+     Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.paystack.co https://checkout.paystack.com https://s3-eu-west-1.amazonaws.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://checkout.paystack.com https://api.paystack.co; frame-src 'self' https://checkout.paystack.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;
+     ```
+  3. **Ad-blockers / Privacy Extensions**: If developing locally, ensure strict tracking protection or browser extensions (like Brave Shields, uBlock Origin) are not injecting synthetic `connect-src 'none'` report headers into the local tab.
+
+### Error 7: React Router Deprecation Warnings
+- **Symptoms**:
+  `React Router Future Flag Warning: React Router will begin wrapping state updates in React.startTransition in v7...`
+- **Solution**:
+  The application has opted into the v7 future transition flags in `App.tsx`:
+  `<BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>`
+  This suppresses the deprecation warnings and prepares the codebase for seamless migration to React Router v7.
 
 ---
 

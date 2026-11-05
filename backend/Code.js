@@ -8,7 +8,7 @@
 var CONFIG = {
   ALLOWED_EMAIL_DOMAIN: '@stu.cu.edu.ng',
   VALID_MALE_HALLS: ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'],
-  VALID_FEMALE_HALLS: ['Mary', 'Lydia', 'Deborah']
+  VALID_FEMALE_HALLS: ['Mary', 'Lydia', 'Deborah', 'Dorcas']
 };
 
 /**

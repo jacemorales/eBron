@@ -1,6 +1,6 @@
 export type Gender = 'Male' | 'Female';
 export type MaleHall = 'Peter' | 'John' | 'Paul' | 'Daniel' | 'Joseph' | 'Joshua';
-export type FemaleHall = 'Mary' | 'Lydia' | 'Deborah';
+export type FemaleHall = 'Mary' | 'Lydia' | 'Deborah' | 'Dorcas';
 export type Hall = MaleHall | FemaleHall;
 
 export type UserRole = 'student' | 'admin';
