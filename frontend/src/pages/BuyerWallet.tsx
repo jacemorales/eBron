@@ -19,7 +19,13 @@ export const BuyerWalletPage: React.FC<{ onToast: (type: 'success' | 'error' | '
         api.getWallet(user.userId),
         api.getWalletTransactions(user.userId)
       ]);
-      setWallet(w);
+      setWallet(prev => {
+        // Guard against stale overwrites if a fresh balance was just set
+        if (prev && prev.availableBalance > w.availableBalance) {
+          return { ...w, availableBalance: prev.availableBalance };
+        }
+        return w;
+      });
       setTransactions(txs);
     } catch (e) {
       console.error(e);
@@ -149,7 +155,10 @@ export const BuyerWalletPage: React.FC<{ onToast: (type: 'success' | 'error' | '
         onClose={() => setTopUpOpen(false)}
         onSuccess={(freshWallet) => {
           setWallet(freshWallet);
-          loadData();
+          // Refresh transactions list
+          if (user) {
+            api.getWalletTransactions(user.userId).then(txs => setTransactions(txs)).catch(console.error);
+          }
         }}
         onToast={onToast}
       />

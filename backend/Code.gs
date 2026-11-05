@@ -646,6 +646,9 @@ function doGet(e) {
       var pList = getSheetRows('Products');
       var oList = getSheetRows('Orders');
       var wList = getSheetRows('Wallets');
+      var wtxList = getSheetRows('WalletTransactions');
+      var sbList = getSheetRows('SalesBalances');
+      var stxList = getSheetRows('SalesTransactions');
       var wdList = getSheetRows('WithdrawalRequests');
       var sList = getSheetRows('SavedItems');
       var mList = getSheetRows('Messages');
@@ -695,8 +698,27 @@ function doGet(e) {
         if (sellers[bId]) bothCount++;
       });
 
-      var pendingBalances = wList.reduce(function(acc, w) { return acc + (Number(w.pendingBalance) || 0); }, 0);
-      var availBalances = wList.reduce(function(acc, w) { return acc + (Number(w.availableBalance) || 0); }, 0);
+      // Filtered transactions for timeframe
+      var filWtx = wtxList.filter(function(t) { return inTime(t.createdAt); });
+      var filStx = stxList.filter(function(t) { return inTime(t.createdAt); });
+
+      // Buyer Wallets (Spending) Analytics
+      var totalBuyerWallets = wList.length;
+      var totalBuyerSpendingBalance = wList.reduce(function(acc, w) { return acc + (Number(w.availableBalance) || 0); }, 0);
+      var topUpTransactions = filWtx.filter(function(t) { return t.type === 'topup' && t.status === 'successful'; });
+      var totalTopUpVolume = topUpTransactions.reduce(function(acc, t) { return acc + (Number(t.amount) || 0); }, 0);
+      var purchaseDeductions = filWtx.filter(function(t) { return t.type === 'purchase_deduction'; });
+      var totalPurchaseDeductionsVolume = purchaseDeductions.reduce(function(acc, t) { return acc + (Number(t.amount) || 0); }, 0);
+
+      // Seller Sales Balance & Payout Analytics
+      var totalSellerSalesBalances = sbList.length;
+      var totalSellerPendingSales = sbList.reduce(function(acc, s) { return acc + (Number(s.pendingBalance) || 0); }, 0);
+      var totalSellerAvailableSales = sbList.reduce(function(acc, s) { return acc + (Number(s.availableBalance) || 0); }, 0);
+      var totalSellerEarnings = sbList.reduce(function(acc, s) { return acc + (Number(s.totalEarnings) || 0); }, 0);
+      var totalSellerWithdrawals = sbList.reduce(function(acc, s) { return acc + (Number(s.totalWithdrawals) || 0); }, 0);
+
+      var filProcessedWds = filWds.filter(function(w) { return w.status === 'processed'; });
+      var totalWithdrawalsProcessedAmount = filProcessedWds.reduce(function(acc, w) { return acc + (Number(w.amount) || 0); }, 0);
 
       var analytics = {
         timeframe: timeframe,
@@ -732,11 +754,32 @@ function doGet(e) {
           completedVolume: completedVol,
           averageOrderValue: completed.length > 0 ? Math.round(completedVol / completed.length) : 0
         },
-        financial: {
-          totalPendingFunds: pendingBalances,
-          totalAvailableBalances: availBalances,
+        // Dedicated Buyer Wallet Analysis
+        walletAnalysis: {
+          totalBuyerWallets: totalBuyerWallets,
+          totalAvailableSpendingBalance: totalBuyerSpendingBalance,
+          topUpCount: topUpTransactions.length,
+          totalTopUpVolume: totalTopUpVolume,
+          purchaseDeductionsCount: purchaseDeductions.length,
+          totalPurchaseDeductionsVolume: totalPurchaseDeductionsVolume
+        },
+        // Dedicated Seller Sales Balance Analysis
+        salesBalanceAnalysis: {
+          totalSellerAccounts: totalSellerSalesBalances,
+          totalPendingSalesBalance: totalSellerPendingSales,
+          totalAvailableSalesBalance: totalSellerAvailableSales,
+          totalLifetimeEarnings: totalSellerEarnings,
+          totalWithdrawalsRequested: totalSellerWithdrawals,
           totalWithdrawalRequestsCount: filWds.length,
-          totalWithdrawalsProcessed: filWds.filter(function(w) { return w.status === 'processed'; }).reduce(function(acc, w) { return acc + (Number(w.amount) || 0); }, 0),
+          totalWithdrawalsProcessedCount: filProcessedWds.length,
+          totalWithdrawalsProcessedAmount: totalWithdrawalsProcessedAmount
+        },
+        // Legacy backward compatible financial field
+        financial: {
+          totalPendingFunds: totalSellerPendingSales,
+          totalAvailableBalances: totalBuyerSpendingBalance + totalSellerAvailableSales,
+          totalWithdrawalRequestsCount: filWds.length,
+          totalWithdrawalsProcessed: totalWithdrawalsProcessedAmount,
           simulatedVolume: totalVol
         },
         engagement: {
@@ -862,8 +905,14 @@ function doPost(e) {
             walletId: 'wal_' + adminUserId,
             userId: adminUserId,
             availableBalance: 500000,
+            updatedAt: adminNow
+          });
+          appendSheetRow('SalesBalances', {
+            salesBalanceId: 'sb_' + adminUserId,
+            userId: adminUserId,
+            availableBalance: 250000,
             pendingBalance: 0,
-            totalEarnings: 500000,
+            totalEarnings: 250000,
             totalWithdrawals: 0,
             updatedAt: adminNow
           });

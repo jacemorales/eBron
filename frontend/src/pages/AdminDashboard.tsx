@@ -22,7 +22,12 @@ import {
   Tag,
   Check,
   Search,
-  Filter
+  Filter,
+  Wallet,
+  Store,
+  CreditCard,
+  ArrowDownLeft,
+  ArrowUpRight
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -338,48 +343,96 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
           </div>
 
-          {/* Section D: Revenue & Financial Analytics */}
+          {/* Section D1: Dedicated Buyer Spending Wallet Analysis */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-emerald-700" /> D. Revenue & Financial Analytics
+                <Wallet className="w-4 h-4 text-emerald-600" /> D1. Buyer Spending Wallet Analysis
               </h2>
-              <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-bold border border-amber-200">
-                Simulated Sandbox Mode (Zero Actual Currency Charges)
+              <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold border border-emerald-200">
+                Buyer Shopping Deposits (Non-withdrawable)
               </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white p-4 rounded-2xl border border-slate-200">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Simulated Transaction Volume</div>
-                <div className="text-xl font-black text-cu-blue mt-1">
-                  ₦{Number(analytics.financial.simulatedVolume || analytics.sales.totalVolume).toLocaleString()}
+                <div className="text-[10px] font-bold uppercase text-slate-400">Buyer Wallets Registered</div>
+                <div className="text-xl font-black text-slate-900 mt-1">
+                  {analytics.walletAnalysis?.totalBuyerWallets ?? analytics.platform.totalUsers}
                 </div>
-                <div className="text-[10px] text-slate-400">Test mode order total</div>
-              </div>
-
-              <div className="bg-white p-4 rounded-2xl border border-amber-200 bg-amber-50/20">
-                <div className="text-[10px] font-bold uppercase text-amber-700">Pending Balance in Wallets</div>
-                <div className="text-xl font-black text-amber-900 mt-1">
-                  ₦{Number(analytics.financial.totalPendingFunds).toLocaleString()}
-                </div>
-                <div className="text-[10px] text-amber-700">Awaiting two-step confirmation</div>
+                <div className="text-[10px] text-slate-400">Student shopping accounts</div>
               </div>
 
               <div className="bg-white p-4 rounded-2xl border border-slate-200">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Available Balance in Wallets</div>
+                <div className="text-[10px] font-bold uppercase text-slate-400">Total Available Spending Capital</div>
                 <div className="text-xl font-black text-emerald-600 mt-1">
-                  ₦{Number(analytics.financial.totalAvailableBalances).toLocaleString()}
+                  ₦{Number(analytics.walletAnalysis?.totalAvailableSpendingBalance ?? analytics.financial.totalAvailableBalances).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-emerald-700">Available to purchase products</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Top-Up Deposits (Period)</div>
+                <div className="text-xl font-black text-cu-blue mt-1">
+                  ₦{Number(analytics.walletAnalysis?.totalTopUpVolume ?? 0).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-400">{analytics.walletAnalysis?.topUpCount ?? 0} Paystack deposits</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Purchase Payments Deducted</div>
+                <div className="text-xl font-black text-purple-700 mt-1">
+                  ₦{Number(analytics.walletAnalysis?.totalPurchaseDeductionsVolume ?? analytics.sales.totalVolume).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-400">{analytics.walletAnalysis?.purchaseDeductionsCount ?? analytics.sales.totalOrders} order deductions</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section D2: Dedicated Seller Sales Balance & Payout Analysis */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                <Store className="w-4 h-4 text-purple-600" /> D2. Seller Sales Balance & Payout Analysis
+              </h2>
+              <span className="text-[11px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full font-bold border border-purple-200">
+                Merchant Earnings & Payout Requests
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200">
+                <div className="text-[10px] font-bold uppercase text-amber-800">Pending Sales (Verification)</div>
+                <div className="text-xl font-black text-amber-900 mt-1">
+                  ₦{Number(analytics.salesBalanceAnalysis?.totalPendingSalesBalance ?? analytics.financial.totalPendingFunds).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-amber-700">Awaiting dual confirmation</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Available Sales Balance</div>
+                <div className="text-xl font-black text-emerald-600 mt-1">
+                  ₦{Number(analytics.salesBalanceAnalysis?.totalAvailableSalesBalance ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[10px] text-emerald-700">Eligible for bank withdrawal</div>
               </div>
 
               <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Total Lifetime Sales Earnings</div>
+                <div className="text-xl font-black text-cu-blue mt-1">
+                  ₦{Number(analytics.salesBalanceAnalysis?.totalLifetimeEarnings ?? analytics.sales.completedVolume).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-400">Confirmed sales revenue</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
                 <div className="text-[10px] font-bold uppercase text-slate-400">Withdrawals Processed</div>
                 <div className="text-xl font-black text-slate-900 mt-1">
-                  ₦{Number(analytics.financial.totalWithdrawalsProcessed).toLocaleString()}
+                  ₦{Number(analytics.salesBalanceAnalysis?.totalWithdrawalsProcessedAmount ?? analytics.financial.totalWithdrawalsProcessed).toLocaleString()}
                 </div>
-                <div className="text-[10px] text-slate-400">{analytics.financial.totalWithdrawalRequestsCount} total requests</div>
+                <div className="text-[10px] text-slate-400">
+                  {analytics.salesBalanceAnalysis?.totalWithdrawalsProcessedCount ?? 0} completed payouts
+                </div>
               </div>
             </div>
           </div>

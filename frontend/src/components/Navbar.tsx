@@ -88,16 +88,14 @@ export const Navbar: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center gap-6">
-            <Link to="/" className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-xl bg-cu-gold flex items-center justify-center text-cu-blue font-black text-xl shadow-lg">
-                eB
-              </div>
-              <div>
-                <span className="font-extrabold text-2xl tracking-tight text-white">eBron</span>
-                <span className="hidden sm:inline-block ml-1.5 text-xs bg-cu-gold/20 text-cu-gold px-1.5 py-0.5 rounded font-medium border border-cu-gold/30">
-                  CU Marketplace
-                </span>
-              </div>
+            <Link to="/" className="flex items-center gap-2 group">
+              <span className="font-black text-2xl tracking-tight text-white flex items-center">
+                <span className="text-cu-gold font-serif italic text-3xl mr-0.5 group-hover:scale-105 transition-transform">e</span>
+                <span>Bron</span>
+              </span>
+              <span className="hidden sm:inline-block ml-1 text-[11px] bg-cu-gold/20 text-cu-gold px-2 py-0.5 rounded-full font-bold border border-cu-gold/40">
+                CU Marketplace
+              </span>
             </Link>
 
             {/* Authenticated Navigation Items (HIDDEN from visitors when not signed in) */}
@@ -122,14 +120,6 @@ export const Navbar: React.FC = () => {
                         <span>Wallets (Spending)</span>
                         <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                       </Link>
-                      <Link to="/messages" onClick={() => setBuyOpen(false)} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-100 font-medium">
-                        <span>Messages</span>
-                        {unreadMessages > 0 && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
-                            {unreadMessages}
-                          </span>
-                        )}
-                      </Link>
                       <div className="border-t border-slate-100 my-1"></div>
                       <Link to="/buy/pending" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Purchases</Link>
                       <Link to="/buy/history" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Purchase History</Link>
@@ -152,14 +142,6 @@ export const Navbar: React.FC = () => {
                     <div className="absolute left-0 mt-2 w-56 rounded-xl bg-white shadow-2xl text-slate-800 py-2 z-50">
                       <Link to="/sell/add" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-bold text-cu-blue">Add Item</Link>
                       <Link to="/sell/catalogue" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales Catalogue</Link>
-                      <Link to="/messages" onClick={() => setSellOpen(false)} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-100 font-medium">
-                        <span>Chat Requests</span>
-                        {unreadMessages > 0 && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
-                            {unreadMessages}
-                          </span>
-                        )}
-                      </Link>
                       <div className="border-t border-slate-100 my-1"></div>
                       <Link to="/sell/pending" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Sales</Link>
                       <Link to="/sell/history" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales History</Link>
