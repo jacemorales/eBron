@@ -100,14 +100,44 @@ var SHEETS_SCHEMA = {
     'notes',
     'createdAt'
   ],
+  // Buyer spending wallet
   Wallets: [
     'walletId',
     'userId',
-    'availableBalance',
-    'pendingBalance',
+    'availableBalance', // Buyer spending funds exclusively
+    'updatedAt'
+  ],
+  // Buyer wallet top-ups & purchase deductions
+  WalletTransactions: [
+    'transactionId',
+    'userId',
+    'type', // 'topup' | 'purchase_deduction'
+    'amount',
+    'reference',
+    'status', // 'successful' | 'pending' | 'failed'
+    'description',
+    'createdAt'
+  ],
+  // Seller sales balance
+  SalesBalances: [
+    'salesBalanceId',
+    'userId',
+    'availableBalance', // Confirmed sales income available for withdrawal
+    'pendingBalance', // Sales income pending dual confirmation
     'totalEarnings',
     'totalWithdrawals',
     'updatedAt'
+  ],
+  // Seller income and withdrawal records
+  SalesTransactions: [
+    'transactionId',
+    'sellerId',
+    'orderId',
+    'orderReference',
+    'amount',
+    'type', // 'pending_sale' | 'released_sale' | 'withdrawal'
+    'status', // 'pending' | 'completed' | 'disputed'
+    'createdAt'
   ],
   WithdrawalRequests: [
     'requestId',
@@ -126,10 +156,20 @@ var SHEETS_SCHEMA = {
     'userId',
     'title',
     'message',
-    'type', // 'order' | 'message' | 'wallet' | 'admin'
-    'relatedId',
+    'type', // 'order' | 'message' | 'wallet' | 'sales' | 'admin'
+    'destinationUrl',
     'isRead',
     'createdAt'
+  ],
+  NotificationSubscriptions: [
+    'subscriptionId',
+    'userId',
+    'endpoint',
+    'p256dh',
+    'auth',
+    'enabled',
+    'createdAt',
+    'updatedAt'
   ],
   Reports: [
     'reportId',

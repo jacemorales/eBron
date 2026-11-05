@@ -19,8 +19,8 @@ export function validateOrderCreation(buyer, product, deliveryInfo, buyerWallet 
     errors.push('Complete delivery information is required.');
   }
   if (buyerWallet && Number(buyerWallet.availableBalance || 0) < Number(product?.price || 0)) {
-    const deficit = Number(product?.price || 0) - Number(buyerWallet.availableBalance || 0);
-    errors.push(`Insufficient wallet balance. You need ₦${deficit.toLocaleString()} more. Please top up your wallet via Paystack.`);
+    const deficit = Number((Number(product?.price || 0) - Number(buyerWallet.availableBalance || 0)).toFixed(2));
+    errors.push(`Insufficient wallet balance. You need ₦${deficit.toLocaleString()} more. Please top up your wallet.`);
   }
   return { valid: errors.length === 0, errors };
 }

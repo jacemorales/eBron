@@ -104,11 +104,37 @@ var SHEETS_SCHEMA = {
   Wallets: [
     'walletId',
     'userId',
-    'availableBalance',
-    'pendingBalance',
+    'availableBalance', // Buyer spending funds exclusively
+    'updatedAt'
+  ],
+  WalletTransactions: [
+    'transactionId',
+    'userId',
+    'type', // 'topup' | 'purchase_deduction'
+    'amount',
+    'reference',
+    'status', // 'successful' | 'pending' | 'failed'
+    'description',
+    'createdAt'
+  ],
+  SalesBalances: [
+    'salesBalanceId',
+    'userId',
+    'availableBalance', // Available for withdrawal
+    'pendingBalance', // Pending dual confirmation
     'totalEarnings',
     'totalWithdrawals',
     'updatedAt'
+  ],
+  SalesTransactions: [
+    'transactionId',
+    'sellerId',
+    'orderId',
+    'orderReference',
+    'amount',
+    'type', // 'pending_sale' | 'released_sale' | 'withdrawal'
+    'status', // 'pending' | 'completed' | 'disputed'
+    'createdAt'
   ],
   WithdrawalRequests: [
     'requestId',
@@ -123,6 +149,26 @@ var SHEETS_SCHEMA = {
     'adminNotes',
     'processedAt',
     'createdAt'
+  ],
+  Notifications: [
+    'notificationId',
+    'userId',
+    'title',
+    'message',
+    'type', // 'order' | 'message' | 'wallet' | 'sales' | 'admin'
+    'destinationUrl',
+    'isRead',
+    'createdAt'
+  ],
+  NotificationSubscriptions: [
+    'subscriptionId',
+    'userId',
+    'endpoint',
+    'p256dh',
+    'auth',
+    'enabled',
+    'createdAt',
+    'updatedAt'
   ],
   Reports: [
     'reportId',
@@ -280,6 +326,28 @@ function computePasswordHash(password, salt) {
   return { hash: hash, salt: s };
 }
 
+function createNotification(userId, title, message, type, destinationUrl) {
+  try {
+    var notifId = 'notif_' + Utilities.getUuid().substr(0, 8);
+    var now = new Date().toISOString();
+    var record = {
+      notificationId: notifId,
+      userId: userId,
+      title: title,
+      message: message,
+      type: type || 'admin',
+      destinationUrl: destinationUrl || '/',
+      isRead: false,
+      createdAt: now
+    };
+    appendSheetRow('Notifications', record);
+    return record;
+  } catch (e) {
+    console.error('Failed to create notification: ' + e);
+    return null;
+  }
+}
+
 /**
  * HTTP GET Request Handler
  */
@@ -374,12 +442,34 @@ function doGet(e) {
       return jsonOutput({ success: true, isSaved: isSaved });
     }
 
-    // 6. GET CONVERSATIONS
+    // 6. GET CONVERSATIONS (with unread message counts)
     if (action === 'getConversations') {
       var convs = getSheetRows('Conversations').filter(function(c) {
         return c.buyerId === params.userId || c.sellerId === params.userId;
       });
+      var allMsgs = getSheetRows('Messages');
+      convs.forEach(function(c) {
+        var unread = allMsgs.filter(function(m) {
+          return m.conversationId === c.conversationId && m.receiverId === params.userId && (m.isRead === false || m.isRead === 'false' || m.isRead === '');
+        }).length;
+        c.unreadCount = unread;
+      });
       return jsonOutput({ success: true, conversations: convs });
+    }
+
+    // 6b. GET UNREAD COUNTS
+    if (action === 'getUnreadCounts') {
+      var uMsgs = getSheetRows('Messages').filter(function(m) {
+        return m.receiverId === params.userId && (m.isRead === false || m.isRead === 'false' || m.isRead === '');
+      });
+      var notifs = getSheetRows('Notifications').filter(function(n) {
+        return n.userId === params.userId && (n.isRead === false || n.isRead === 'false' || n.isRead === '');
+      });
+      return jsonOutput({
+        success: true,
+        unreadMessages: uMsgs.length,
+        unreadNotifications: notifs.length
+      });
     }
 
     // 7. GET MESSAGES
@@ -387,7 +477,36 @@ function doGet(e) {
       var msgs = getSheetRows('Messages').filter(function(m) {
         return m.conversationId === params.conversationId;
       });
+      // Mark as read if user is receiver
+      if (params.userId) {
+        var ss = getDb();
+        var mSheet = ss.getSheetByName('Messages');
+        if (mSheet && mSheet.getLastRow() > 1) {
+          var mData = mSheet.getDataRange().getValues();
+          var mHeaders = mData[0];
+          var convIdx = mHeaders.indexOf('conversationId');
+          var recIdx = mHeaders.indexOf('receiverId');
+          var isReadIdx = mHeaders.indexOf('isRead');
+          if (convIdx !== -1 && recIdx !== -1 && isReadIdx !== -1) {
+            for (var mi = 1; mi < mData.length; mi++) {
+              if (mData[mi][convIdx] === params.conversationId && mData[mi][recIdx] === params.userId) {
+                mSheet.getRange(mi + 1, isReadIdx + 1).setValue(true);
+              }
+            }
+          }
+        }
+      }
       return jsonOutput({ success: true, messages: msgs });
+    }
+
+    // 7b. GET NOTIFICATIONS
+    if (action === 'getNotifications') {
+      var notifs = getSheetRows('Notifications').filter(function(n) {
+        return n.userId === params.userId;
+      }).sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+      return jsonOutput({ success: true, notifications: notifs });
     }
 
     // 8. GET ORDERS
@@ -401,7 +520,7 @@ function doGet(e) {
       return jsonOutput({ success: true, orders: orders });
     }
 
-    // 9. GET WALLET
+    // 9. GET WALLET (Buyer Spending Wallet)
     if (action === 'getWallet') {
       var wallets = getSheetRows('Wallets');
       var w = wallets.find(function(item) { return item.userId === params.userId; });
@@ -410,9 +529,6 @@ function doGet(e) {
           walletId: 'wal_' + params.userId,
           userId: params.userId,
           availableBalance: 0,
-          pendingBalance: 0,
-          totalEarnings: 0,
-          totalWithdrawals: 0,
           updatedAt: new Date().toISOString()
         };
         appendSheetRow('Wallets', w);
@@ -420,10 +536,51 @@ function doGet(e) {
       return jsonOutput({ success: true, wallet: w });
     }
 
-    // 10. GET USER WITHDRAWALS
+    // 9b. GET WALLET TRANSACTIONS (Buyer Top-ups & Deductions)
+    if (action === 'getWalletTransactions') {
+      var wtxs = getSheetRows('WalletTransactions').filter(function(tx) {
+        return tx.userId === params.userId;
+      }).sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+      return jsonOutput({ success: true, transactions: wtxs });
+    }
+
+    // 9c. GET SALES BALANCE (Seller Income Account)
+    if (action === 'getSalesBalance') {
+      var sbList = getSheetRows('SalesBalances');
+      var sb = sbList.find(function(item) { return item.userId === params.userId; });
+      if (!sb) {
+        sb = {
+          salesBalanceId: 'sb_' + params.userId,
+          userId: params.userId,
+          availableBalance: 0,
+          pendingBalance: 0,
+          totalEarnings: 0,
+          totalWithdrawals: 0,
+          updatedAt: new Date().toISOString()
+        };
+        appendSheetRow('SalesBalances', sb);
+      }
+      return jsonOutput({ success: true, salesBalance: sb });
+    }
+
+    // 9d. GET SALES TRANSACTIONS (Seller sales income history)
+    if (action === 'getSalesTransactions') {
+      var stxs = getSheetRows('SalesTransactions').filter(function(tx) {
+        return tx.sellerId === params.userId;
+      }).sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+      return jsonOutput({ success: true, transactions: stxs });
+    }
+
+    // 10. GET USER WITHDRAWALS (From Sales Balance)
     if (action === 'getUserWithdrawals') {
       var wds = getSheetRows('WithdrawalRequests').filter(function(item) {
         return item.userId === params.userId;
+      }).sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
       });
       return jsonOutput({ success: true, withdrawals: wds });
     }
@@ -654,11 +811,18 @@ function doPost(e) {
         walletId: 'wal_' + userId,
         userId: userId,
         availableBalance: 0,
+        updatedAt: now
+      });
+      appendSheetRow('SalesBalances', {
+        salesBalanceId: 'sb_' + userId,
+        userId: userId,
+        availableBalance: 0,
         pendingBalance: 0,
         totalEarnings: 0,
         totalWithdrawals: 0,
         updatedAt: now
       });
+      createNotification(userId, 'Welcome to eBron!', 'Your student marketplace account is active. Explore products or list your first item.', 'admin', '/');
 
       delete newUser.passwordHash;
       delete newUser.salt;
@@ -913,10 +1077,100 @@ function doPost(e) {
         lastMessageAt: now
       });
 
+      var senderName = conv.buyerId === payload.senderId ? (conv.buyerName || 'Buyer') : (conv.sellerName || 'Seller');
+      var snippet = payload.content.length > 50 ? (payload.content.substring(0, 50) + '...') : payload.content;
+      createNotification(
+        receiverId,
+        'New message from ' + senderName,
+        snippet,
+        'message',
+        '/messages?conversationId=' + payload.conversationId
+      );
+
       return jsonOutput({ success: true, message: newMsg });
     }
 
-    // 10b. TOP UP WALLET (via Paystack)
+    // 10a2. MARK CONVERSATION AS READ
+    if (action === 'markConversationAsRead') {
+      var convId = payload.conversationId;
+      var currentUserId = payload.userId;
+      var ss = getDb();
+      var mSheet = ss.getSheetByName('Messages');
+      if (mSheet && mSheet.getLastRow() > 1) {
+        var mData = mSheet.getDataRange().getValues();
+        var mHeaders = mData[0];
+        var cIdx = mHeaders.indexOf('conversationId');
+        var rIdx = mHeaders.indexOf('receiverId');
+        var irIdx = mHeaders.indexOf('isRead');
+        if (cIdx !== -1 && rIdx !== -1 && irIdx !== -1) {
+          for (var i = 1; i < mData.length; i++) {
+            if (mData[i][cIdx] === convId && mData[i][rIdx] === currentUserId) {
+              mSheet.getRange(i + 1, irIdx + 1).setValue(true);
+            }
+          }
+        }
+      }
+      return jsonOutput({ success: true });
+    }
+
+    // 10a3. MARK NOTIFICATION AS READ
+    if (action === 'markNotificationRead') {
+      if (payload.all && payload.userId) {
+        var ss = getDb();
+        var nSheet = ss.getSheetByName('Notifications');
+        if (nSheet && nSheet.getLastRow() > 1) {
+          var nData = nSheet.getDataRange().getValues();
+          var nHeaders = nData[0];
+          var uIdx = nHeaders.indexOf('userId');
+          var isRIdx = nHeaders.indexOf('isRead');
+          if (uIdx !== -1 && isRIdx !== -1) {
+            for (var ni = 1; ni < nData.length; ni++) {
+              if (nData[ni][uIdx] === payload.userId) {
+                nSheet.getRange(ni + 1, isRIdx + 1).setValue(true);
+              }
+            }
+          }
+        }
+        return jsonOutput({ success: true });
+      } else if (payload.notificationId) {
+        updateSheetRow('Notifications', 'notificationId', payload.notificationId, { isRead: true });
+        return jsonOutput({ success: true });
+      }
+      return jsonOutput({ success: false, error: 'Invalid parameters' });
+    }
+
+    // 10a4. SAVE PUSH SUBSCRIPTION
+    if (action === 'savePushSubscription') {
+      var subUserId = payload.userId;
+      var subEndpoint = payload.endpoint;
+      var subP256dh = payload.p256dh;
+      var subAuth = payload.auth;
+      var nowSub = new Date().toISOString();
+
+      var subs = getSheetRows('NotificationSubscriptions');
+      var existingSub = subs.find(function(s) { return s.userId === subUserId && s.endpoint === subEndpoint; });
+
+      if (existingSub) {
+        updateSheetRow('NotificationSubscriptions', 'subscriptionId', existingSub.subscriptionId, {
+          enabled: payload.enabled !== false,
+          updatedAt: nowSub
+        });
+      } else {
+        appendSheetRow('NotificationSubscriptions', {
+          subscriptionId: 'sub_' + Utilities.getUuid().substr(0, 8),
+          userId: subUserId,
+          endpoint: subEndpoint,
+          p256dh: subP256dh,
+          auth: subAuth,
+          enabled: true,
+          createdAt: nowSub,
+          updatedAt: nowSub
+        });
+      }
+      return jsonOutput({ success: true });
+    }
+
+    // 10b. TOP UP BUYER WALLET (via Paystack)
     if (action === 'topUpWallet') {
       var topUserId = payload.userId;
       var topAmount = Number(payload.amount);
@@ -924,6 +1178,14 @@ function doPost(e) {
 
       if (!topAmount || topAmount <= 0) {
         return jsonOutput({ success: false, error: 'Invalid top up amount.' });
+      }
+
+      // Check duplicate reference in WalletTransactions
+      var existingTx = getSheetRows('WalletTransactions').find(function(tx) {
+        return tx.reference === payRef && tx.status === 'successful';
+      });
+      if (existingTx) {
+        return jsonOutput({ success: false, error: 'This transaction reference has already been processed.' });
       }
 
       var wList = getSheetRows('Wallets');
@@ -935,20 +1197,38 @@ function doPost(e) {
           walletId: 'wal_' + topUserId,
           userId: topUserId,
           availableBalance: topAmount,
-          pendingBalance: 0,
-          totalEarnings: 0,
-          totalWithdrawals: 0,
           updatedAt: now
         };
         appendSheetRow('Wallets', userWallet);
       } else {
-        var updatedAvail = (Number(userWallet.availableBalance) || 0) + topAmount;
+        var updatedAvail = Number(((Number(userWallet.availableBalance) || 0) + topAmount).toFixed(2));
         updateSheetRow('Wallets', 'userId', topUserId, {
           availableBalance: updatedAvail,
           updatedAt: now
         });
         userWallet.availableBalance = updatedAvail;
       }
+
+      // Record in WalletTransactions
+      appendSheetRow('WalletTransactions', {
+        transactionId: 'wtx_' + Utilities.getUuid().substr(0, 8),
+        userId: topUserId,
+        type: 'topup',
+        amount: topAmount,
+        reference: payRef,
+        status: 'successful',
+        description: 'Paystack Wallet Top-up',
+        createdAt: now
+      });
+
+      // Notification
+      createNotification(
+        topUserId,
+        'Wallet Funded Successfully',
+        '₦' + topAmount.toLocaleString() + ' was successfully credited to your spending wallet.',
+        'wallet',
+        '/buy/wallets'
+      );
 
       return jsonOutput({ success: true, wallet: userWallet, reference: payRef });
     }
@@ -1007,18 +1287,31 @@ function doPost(e) {
       appendSheetRow('Orders', newOrder);
       updateSheetRow('Products', 'productId', prod.productId, { availability: 'sold', updatedAt: now });
 
-      // Deduct from buyer available balance
-      var newBuyerAvail = buyerAvail - price;
+      // Deduct from buyer available balance (Wallets)
+      var newBuyerAvail = Number((buyerAvail - price).toFixed(2));
       updateSheetRow('Wallets', 'userId', payload.buyerId, {
         availableBalance: newBuyerAvail,
         updatedAt: now
       });
 
-      // Add to seller pending balance
-      var sWallet = wList.find(function(w) { return w.userId === prod.sellerId; });
-      if (!sWallet) {
-        appendSheetRow('Wallets', {
-          walletId: 'wal_' + prod.sellerId,
+      // Record buyer WalletTransaction
+      appendSheetRow('WalletTransactions', {
+        transactionId: 'wtx_' + Utilities.getUuid().substr(0, 8),
+        userId: payload.buyerId,
+        type: 'purchase_deduction',
+        amount: price,
+        reference: oRef,
+        status: 'successful',
+        description: 'Purchase payment for ' + prod.name,
+        createdAt: now
+      });
+
+      // Credit seller pending balance in SalesBalances (NOT Wallets)
+      var sbList = getSheetRows('SalesBalances');
+      var sBalance = sbList.find(function(s) { return s.userId === prod.sellerId; });
+      if (!sBalance) {
+        appendSheetRow('SalesBalances', {
+          salesBalanceId: 'sb_' + prod.sellerId,
           userId: prod.sellerId,
           availableBalance: 0,
           pendingBalance: price,
@@ -1027,9 +1320,38 @@ function doPost(e) {
           updatedAt: now
         });
       } else {
-        var newPending = (Number(sWallet.pendingBalance) || 0) + price;
-        updateSheetRow('Wallets', 'userId', prod.sellerId, { pendingBalance: newPending, updatedAt: now });
+        var newPending = Number(((Number(sBalance.pendingBalance) || 0) + price).toFixed(2));
+        updateSheetRow('SalesBalances', 'userId', prod.sellerId, { pendingBalance: newPending, updatedAt: now });
       }
+
+      // Record in SalesTransactions
+      appendSheetRow('SalesTransactions', {
+        transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
+        sellerId: prod.sellerId,
+        orderId: oId,
+        orderReference: oRef,
+        amount: price,
+        type: 'pending_sale',
+        status: 'pending',
+        createdAt: now
+      });
+
+      // Send notifications to buyer and seller
+      createNotification(
+        payload.buyerId,
+        'Purchase Placed (' + oRef + ')',
+        'Your payment of ₦' + price.toLocaleString() + ' for ' + prod.name + ' was deducted. Track your delivery and confirm receipt when received.',
+        'order',
+        '/buy/pending'
+      );
+
+      createNotification(
+        prod.sellerId,
+        'New Sale Received! (' + oRef + ')',
+        payload.buyerName + ' purchased ' + prod.name + ' for ₦' + price.toLocaleString() + '. Deliver the item and confirm handover.',
+        'order',
+        '/sell/pending'
+      );
 
       return jsonOutput({ success: true, order: newOrder });
     }
@@ -1053,23 +1375,65 @@ function doPost(e) {
         st = 'completed';
         released = true;
 
-        // Shift pending to available in seller wallet
-        var w = getSheetRows('Wallets').find(function(item) { return item.userId === ord.sellerId; });
-        if (w) {
-          var pBal = Math.max(0, (Number(w.pendingBalance) || 0) - Number(ord.amount));
-          var aBal = (Number(w.availableBalance) || 0) + Number(ord.amount);
-          var tot = (Number(w.totalEarnings) || 0) + Number(ord.amount);
-          updateSheetRow('Wallets', 'userId', ord.sellerId, {
+        // Shift pending to available in seller SalesBalances (NOT Wallets)
+        var sb = getSheetRows('SalesBalances').find(function(item) { return item.userId === ord.sellerId; });
+        if (sb) {
+          var pBal = Math.max(0, Number(((Number(sb.pendingBalance) || 0) - Number(ord.amount)).toFixed(2)));
+          var aBal = Number(((Number(sb.availableBalance) || 0) + Number(ord.amount)).toFixed(2));
+          var tot = Number(((Number(sb.totalEarnings) || 0) + Number(ord.amount)).toFixed(2));
+          updateSheetRow('SalesBalances', 'userId', ord.sellerId, {
             pendingBalance: pBal,
             availableBalance: aBal,
             totalEarnings: tot,
             updatedAt: now
           });
         }
+
+        // Add released transaction to SalesTransactions
+        appendSheetRow('SalesTransactions', {
+          transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
+          sellerId: ord.sellerId,
+          orderId: ord.orderId,
+          orderReference: ord.orderReference,
+          amount: ord.amount,
+          type: 'released_sale',
+          status: 'completed',
+          createdAt: now
+        });
+
+        createNotification(
+          ord.sellerId,
+          'Funds Released to Sales Balance (' + ord.orderReference + ')',
+          '₦' + Number(ord.amount).toLocaleString() + ' is now available for withdrawal in your Sales Balance.',
+          'sales',
+          '/sell/sales-balance'
+        );
+
+        createNotification(
+          ord.buyerId,
+          'Transaction Completed (' + ord.orderReference + ')',
+          'Your transaction for ' + (ord.productName || 'product') + ' is marked complete. Thank you for using eBron!',
+          'order',
+          '/buy/history'
+        );
       } else if (sellerAt) {
         st = 'awaiting_buyer_confirmation';
+        createNotification(
+          ord.buyerId,
+          'Seller Confirmed Delivery (' + ord.orderReference + ')',
+          'The seller confirmed handing over ' + (ord.productName || 'your item') + '. Please confirm receipt once received.',
+          'order',
+          '/buy/pending'
+        );
       } else if (buyerAt) {
         st = 'awaiting_seller_confirmation';
+        createNotification(
+          ord.sellerId,
+          'Buyer Confirmed Receipt (' + ord.orderReference + ')',
+          'The buyer has confirmed receiving the item. Please confirm handover to release funds.',
+          'order',
+          '/sell/pending'
+        );
       }
 
       updateSheetRow('Orders', 'orderId', ord.orderId, {
@@ -1098,19 +1462,24 @@ function doPost(e) {
       return jsonOutput({ success: true });
     }
 
-    // 14. WITHDRAWAL REQUESTS
+    // 14. WITHDRAWAL REQUESTS (Deducted from Seller Sales Balance)
     if (action === 'requestWithdrawal') {
       var user = getSheetRows('Users').find(function(u) { return u.userId === payload.userId; });
-      var wallet = getSheetRows('Wallets').find(function(w) { return w.userId === payload.userId; });
+      var sbList = getSheetRows('SalesBalances');
+      var sBalance = sbList.find(function(w) { return w.userId === payload.userId; });
       var amt = Number(payload.amount);
 
-      if (!wallet || (Number(wallet.availableBalance) || 0) < amt) {
-        return jsonOutput({ success: false, error: 'Insufficient available balance.' });
+      if (!sBalance || (Number(sBalance.availableBalance) || 0) < amt) {
+        return jsonOutput({
+          success: false,
+          error: 'Insufficient available sales balance. Pending sales cannot be withdrawn, and buyer wallet funds cannot be withdrawn.'
+        });
       }
 
       var now = new Date().toISOString();
+      var reqId = 'wdr_' + Utilities.getUuid().substr(0, 8);
       var req = {
-        requestId: 'wdr_' + Utilities.getUuid().substr(0, 8),
+        requestId: reqId,
         userId: payload.userId,
         userName: user ? user.fullName : '',
         userEmail: user ? user.schoolEmail : '',
@@ -1125,8 +1494,32 @@ function doPost(e) {
       };
 
       appendSheetRow('WithdrawalRequests', req);
-      var newAvail = (Number(wallet.availableBalance) - amt);
-      updateSheetRow('Wallets', 'userId', payload.userId, { availableBalance: newAvail, updatedAt: now });
+      var newAvail = Number(((Number(sBalance.availableBalance) || 0) - amt).toFixed(2));
+      var newTotalW = Number(((Number(sBalance.totalWithdrawals) || 0) + amt).toFixed(2));
+      updateSheetRow('SalesBalances', 'userId', payload.userId, {
+        availableBalance: newAvail,
+        totalWithdrawals: newTotalW,
+        updatedAt: now
+      });
+
+      appendSheetRow('SalesTransactions', {
+        transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
+        sellerId: payload.userId,
+        orderId: '',
+        orderReference: reqId,
+        amount: amt,
+        type: 'withdrawal',
+        status: 'pending',
+        createdAt: now
+      });
+
+      createNotification(
+        payload.userId,
+        'Withdrawal Request Submitted',
+        'Your request for ₦' + amt.toLocaleString() + ' has been submitted and is pending administrator review.',
+        'sales',
+        '/sell/sales-balance'
+      );
 
       return jsonOutput({ success: true, request: req });
     }
@@ -1143,17 +1536,31 @@ function doPost(e) {
         processedAt: now
       });
 
-      var wal = getSheetRows('Wallets').find(function(item) { return item.userId === wReq.userId; });
-      if (wal) {
-        if (payload.decision === 'processed') {
-          var totW = (Number(wal.totalWithdrawals) || 0) + Number(wReq.amount);
-          updateSheetRow('Wallets', 'userId', wReq.userId, { totalWithdrawals: totW, updatedAt: now });
-        } else if (payload.decision === 'rejected') {
-          // Refund
-          var refundAvail = (Number(wal.availableBalance) || 0) + Number(wReq.amount);
-          updateSheetRow('Wallets', 'userId', wReq.userId, { availableBalance: refundAvail, updatedAt: now });
+      var sb = getSheetRows('SalesBalances').find(function(item) { return item.userId === wReq.userId; });
+      if (sb) {
+        if (payload.decision === 'rejected') {
+          // Refund to seller available sales balance
+          var refundAvail = Number(((Number(sb.availableBalance) || 0) + Number(wReq.amount)).toFixed(2));
+          var refundTotalW = Math.max(0, Number(((Number(sb.totalWithdrawals) || 0) - Number(wReq.amount)).toFixed(2)));
+          updateSheetRow('SalesBalances', 'userId', wReq.userId, {
+            availableBalance: refundAvail,
+            totalWithdrawals: refundTotalW,
+            updatedAt: now
+          });
         }
       }
+
+      var notifMsg = payload.decision === 'processed'
+        ? 'Your withdrawal of ₦' + Number(wReq.amount).toLocaleString() + ' has been processed.'
+        : 'Your withdrawal request was rejected. The funds have been refunded to your available sales balance.';
+
+      createNotification(
+        wReq.userId,
+        'Withdrawal ' + (payload.decision === 'processed' ? 'Processed' : 'Rejected'),
+        notifMsg,
+        'sales',
+        '/sell/sales-balance'
+      );
 
       return jsonOutput({ success: true });
     }

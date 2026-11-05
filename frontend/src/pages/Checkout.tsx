@@ -1,36 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { MapPin, Edit2, CheckCircle, CreditCard, ArrowRight, Wallet, AlertCircle, PlusCircle, ShieldCheck } from 'lucide-react';
-import type { Product, Gender, Hall, Wallet as WalletType } from '../types';
+import { MapPin, Edit2, CheckCircle, ArrowRight, Wallet, AlertCircle, PlusCircle, ShieldCheck } from 'lucide-react';
+import type { Product, Gender, Hall, BuyerWallet } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { TopUpModal } from '../components/TopUpModal';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
 const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah'];
-
-declare global {
-  interface Window {
-    PaystackPop?: {
-      setup: (options: Record<string, any>) => {
-        openIframe: () => void;
-      };
-    };
-  }
-}
 
 export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const { user, updateProfile } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
-  const [wallet, setWallet] = useState<WalletType | null>(null);
+  const [wallet, setWallet] = useState<BuyerWallet | null>(null);
   const [editing, setEditing] = useState(false);
   const [fullName, setFullName] = useState('');
   const [gender, setGender] = useState<Gender>('Male');
   const [hall, setHall] = useState<Hall>('Peter');
   const [room, setRoom] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [toppingUp, setToppingUp] = useState(false);
+  const [topUpModalOpen, setTopUpModalOpen] = useState(false);
 
   const fetchWallet = async () => {
     if (user) {
@@ -68,63 +59,6 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
   const price = Number(product?.price || 0);
   const deficit = Math.max(0, price - availableBalance);
   const hasSufficientBalance = availableBalance >= price;
-
-  const handlePaystackTopUp = (amountToTopUp: number) => {
-    if (!user) return;
-    setToppingUp(true);
-
-    const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_sample_covenant_university';
-
-    // If Paystack inline JS is loaded
-    if (window.PaystackPop && window.PaystackPop.setup && !paystackKey.startsWith('pk_test_sample')) {
-      const handler = window.PaystackPop.setup({
-        key: paystackKey,
-        email: user.schoolEmail,
-        amount: Math.round(amountToTopUp * 100), // amount in kobo
-        currency: 'NGN',
-        ref: 'PSTK_' + Date.now(),
-        metadata: {
-          custom_fields: [
-            { display_name: 'Student Name', variable_name: 'student_name', value: user.fullName },
-            { display_name: 'Reg Number', variable_name: 'reg_number', value: user.regNumber }
-          ]
-        },
-        callback: async (response: { reference: string }) => {
-          const res = await api.topUpWallet(user.userId, amountToTopUp, response.reference);
-          if (res.success && res.wallet) {
-            setWallet(res.wallet);
-            onToast('success', `₦${amountToTopUp.toLocaleString()} added to your wallet via Paystack!`);
-          } else {
-            await fetchWallet();
-            onToast('success', `Wallet topped up successfully!`);
-          }
-          setToppingUp(false);
-        },
-        onClose: () => {
-          setToppingUp(false);
-          onToast('info', 'Paystack top up cancelled.');
-        }
-      });
-      handler.openIframe();
-    } else {
-      // Test / development mode Paystack inline top-up simulation
-      setTimeout(async () => {
-        const res = await api.topUpWallet(user.userId, amountToTopUp, 'PSTK_TEST_' + Date.now());
-        if (res.success && res.wallet) {
-          setWallet(res.wallet);
-          onToast('success', `₦${amountToTopUp.toLocaleString()} topped up to your wallet!`);
-        } else {
-          // Local fallback in case backend is offline
-          setWallet(prev => prev ? {
-            ...prev,
-            availableBalance: (Number(prev.availableBalance) || 0) + amountToTopUp
-          } : null);
-          onToast('success', `₦${amountToTopUp.toLocaleString()} added to wallet!`);
-        }
-        setToppingUp(false);
-      }, 500);
-    }
-  };
 
   const handlePay = async () => {
     if (!user || !product) return;
@@ -254,23 +188,22 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
                   <span>Insufficient balance (Short by ₦{deficit.toLocaleString()})</span>
                 </div>
                 <p className="text-[11px] text-amber-800">
-                  You need to fund your eBron wallet with at least ₦{deficit.toLocaleString()} via Paystack to complete this purchase.
+                  You need to fund your eBron spending wallet with at least ₦{deficit.toLocaleString()} via Paystack to complete this purchase.
                 </p>
                 <div className="flex gap-2 pt-1">
                   <button
                     type="button"
-                    disabled={toppingUp}
-                    onClick={() => handlePaystackTopUp(deficit)}
-                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-lg text-xs shadow flex items-center justify-center gap-1"
+                    onClick={() => setTopUpModalOpen(true)}
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow flex items-center justify-center gap-1"
                   >
-                    <PlusCircle className="w-3.5 h-3.5" /> {toppingUp ? 'Processing...' : `Top Up ₦${deficit.toLocaleString()} (Paystack)`}
+                    <PlusCircle className="w-3.5 h-3.5" /> Top Up Wallet (₦{deficit.toLocaleString()} needed)
                   </button>
                 </div>
               </div>
             ) : (
               <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-[11px] flex items-center gap-1.5 font-medium">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                <span>Wallet balance is sufficient. Funds will be placed in secure escrow.</span>
+                <span>Wallet balance is sufficient. Funds will be placed in payment protection until dual confirmation.</span>
               </div>
             )}
           </div>
@@ -289,6 +222,20 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
           </button>
         </div>
       </div>
+
+      {/* Unified Top Up Modal */}
+      <TopUpModal
+        isOpen={topUpModalOpen}
+        onClose={() => setTopUpModalOpen(false)}
+        defaultAmount={deficit || 5000}
+        minAmount={deficit > 0 ? deficit : 100}
+        notice={`Top up at least ₦${deficit.toLocaleString()} to purchase "${product.name}".`}
+        onSuccess={(freshWallet) => {
+          setWallet(freshWallet);
+          onToast('success', `Wallet updated! Available balance: ₦${freshWallet.availableBalance.toLocaleString()}`);
+        }}
+        onToast={onToast}
+      />
     </div>
   );
 };

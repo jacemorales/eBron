@@ -4,11 +4,16 @@ import type {
   Conversation,
   Message,
   Order,
+  BuyerWallet,
   Wallet,
+  WalletTransaction,
+  SellerBalance,
+  SalesTransaction,
   WithdrawalRequest,
   ProductReport,
   ReportCategory,
   ReportStatus,
+  NotificationItem,
   Gender,
   Hall
 } from '../types';
@@ -334,12 +339,77 @@ export const api = {
     }
   },
 
+  async markConversationAsRead(conversationId: string, userId: string): Promise<{ success: boolean }> {
+    try {
+      const res = await gasPost('markConversationAsRead', { conversationId, userId });
+      return { success: Boolean(res.success) };
+    } catch (err) {
+      return { success: false };
+    }
+  },
+
+  async getUnreadCounts(userId: string): Promise<{ unreadMessages: number; unreadNotifications: number }> {
+    try {
+      const res = await gasGet('getUnreadCounts', { userId });
+      return {
+        unreadMessages: Number(res.unreadMessages) || 0,
+        unreadNotifications: Number(res.unreadNotifications) || 0
+      };
+    } catch (err) {
+      return { unreadMessages: 0, unreadNotifications: 0 };
+    }
+  },
+
   async sendMessage(conversationId: string, senderId: string, content: string): Promise<{ success: boolean; message?: Message; error?: string }> {
     try {
       const res = await gasPost('sendMessage', { conversationId, senderId, content });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };
+    }
+  },
+
+  // Notifications
+  async getNotifications(userId: string): Promise<NotificationItem[]> {
+    try {
+      const res = await gasGet('getNotifications', { userId });
+      return res.notifications || [];
+    } catch (err) {
+      console.error('getNotifications error:', err);
+      return [];
+    }
+  },
+
+  async markNotificationRead(notificationId: string): Promise<{ success: boolean }> {
+    try {
+      const res = await gasPost('markNotificationRead', { notificationId });
+      return { success: Boolean(res.success) };
+    } catch {
+      return { success: false };
+    }
+  },
+
+  async markAllNotificationsRead(userId: string): Promise<{ success: boolean }> {
+    try {
+      const res = await gasPost('markNotificationRead', { userId, all: true });
+      return { success: Boolean(res.success) };
+    } catch {
+      return { success: false };
+    }
+  },
+
+  async savePushSubscription(userId: string, subscription: any): Promise<{ success: boolean }> {
+    try {
+      const res = await gasPost('savePushSubscription', {
+        userId,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.keys ? subscription.keys.p256dh : '',
+        auth: subscription.keys ? subscription.keys.auth : '',
+        enabled: true
+      });
+      return { success: Boolean(res.success) };
+    } catch {
+      return { success: false };
     }
   },
 
@@ -407,8 +477,8 @@ export const api = {
     }
   },
 
-  // Wallets & Withdrawals
-  async getWallet(userId: string): Promise<Wallet> {
+  // Buyer Wallets & Transactions
+  async getWallet(userId: string): Promise<BuyerWallet> {
     try {
       const res = await gasGet('getWallet', { userId });
       if (res && res.wallet) return res.wallet;
@@ -419,6 +489,41 @@ export const api = {
       walletId: 'wal_' + userId,
       userId,
       availableBalance: 0,
+      updatedAt: new Date().toISOString()
+    };
+  },
+
+  async getWalletTransactions(userId: string): Promise<WalletTransaction[]> {
+    try {
+      const res = await gasGet('getWalletTransactions', { userId });
+      return res.transactions || [];
+    } catch (err) {
+      console.error('getWalletTransactions error:', err);
+      return [];
+    }
+  },
+
+  async topUpWallet(userId: string, amount: number, reference?: string): Promise<{ success: boolean; wallet?: BuyerWallet; error?: string }> {
+    try {
+      const res = await gasPost('topUpWallet', { userId, amount, reference });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  // Seller Sales Balances & Withdrawals
+  async getSalesBalance(userId: string): Promise<SellerBalance> {
+    try {
+      const res = await gasGet('getSalesBalance', { userId });
+      if (res && res.salesBalance) return res.salesBalance;
+    } catch (err) {
+      console.error('getSalesBalance error:', err);
+    }
+    return {
+      salesBalanceId: 'sb_' + userId,
+      userId,
+      availableBalance: 0,
       pendingBalance: 0,
       totalEarnings: 0,
       totalWithdrawals: 0,
@@ -426,12 +531,13 @@ export const api = {
     };
   },
 
-  async topUpWallet(userId: string, amount: number, reference?: string): Promise<{ success: boolean; wallet?: Wallet; error?: string }> {
+  async getSalesTransactions(userId: string): Promise<SalesTransaction[]> {
     try {
-      const res = await gasPost('topUpWallet', { userId, amount, reference });
-      return res;
-    } catch (err: any) {
-      return { success: false, error: err.message };
+      const res = await gasGet('getSalesTransactions', { userId });
+      return res.transactions || [];
+    } catch (err) {
+      console.error('getSalesTransactions error:', err);
+      return [];
     }
   },
 

@@ -10,9 +10,12 @@ import {
   Menu,
   X,
   User,
-  LogIn
+  MessageSquare,
+  Wallet
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from './NotificationBell';
+import { api } from '../services/api';
 
 export const Navbar: React.FC = () => {
   const { user, logout } = useAuth();
@@ -23,10 +26,28 @@ export const Navbar: React.FC = () => {
   const [sellOpen, setSellOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const buyRef = useRef<HTMLDivElement>(null);
   const sellRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+
+  const fetchUnread = async () => {
+    if (user) {
+      try {
+        const counts = await api.getUnreadCounts(user.userId);
+        setUnreadMessages(counts.unreadMessages);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 10000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -97,7 +118,18 @@ export const Navbar: React.FC = () => {
                     <div className="absolute left-0 mt-2 w-56 rounded-xl bg-white shadow-2xl text-slate-800 py-2 z-50">
                       <Link to="/" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Browse Marketplace</Link>
                       <Link to="/buy/saved" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Saved Items</Link>
-                      <Link to="/messages" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Messages</Link>
+                      <Link to="/buy/wallets" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-black text-emerald-700 flex items-center justify-between">
+                        <span>Wallets (Spending)</span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      </Link>
+                      <Link to="/messages" onClick={() => setBuyOpen(false)} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-100 font-medium">
+                        <span>Messages</span>
+                        {unreadMessages > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
+                            {unreadMessages}
+                          </span>
+                        )}
+                      </Link>
                       <div className="border-t border-slate-100 my-1"></div>
                       <Link to="/buy/pending" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Purchases</Link>
                       <Link to="/buy/history" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Purchase History</Link>
@@ -120,14 +152,35 @@ export const Navbar: React.FC = () => {
                     <div className="absolute left-0 mt-2 w-56 rounded-xl bg-white shadow-2xl text-slate-800 py-2 z-50">
                       <Link to="/sell/add" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-bold text-cu-blue">Add Item</Link>
                       <Link to="/sell/catalogue" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales Catalogue</Link>
-                      <Link to="/messages" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Chat Requests</Link>
+                      <Link to="/messages" onClick={() => setSellOpen(false)} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-100 font-medium">
+                        <span>Chat Requests</span>
+                        {unreadMessages > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
+                            {unreadMessages}
+                          </span>
+                        )}
+                      </Link>
                       <div className="border-t border-slate-100 my-1"></div>
                       <Link to="/sell/pending" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Sales</Link>
                       <Link to="/sell/history" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales History</Link>
-                      <Link to="/sell/wallet" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-bold text-emerald-700">Balance & Wallet</Link>
+                      <Link to="/sell/sales-balance" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-black text-purple-700">Sales Balance</Link>
                     </div>
                   )}
                 </div>
+
+                {/* Quick link to Messages with Unread Counter */}
+                <Link
+                  to="/messages"
+                  className="relative flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-slate-200 hover:text-white hover:bg-cu-dark transition"
+                >
+                  <MessageSquare className="w-4 h-4 text-cu-gold" />
+                  <span>Messages</span>
+                  {unreadMessages > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white animate-pulse">
+                      {unreadMessages}
+                    </span>
+                  )}
+                </Link>
               </nav>
             )}
           </div>
@@ -135,7 +188,9 @@ export const Navbar: React.FC = () => {
           {/* User / Authentication Actions */}
           <div className="hidden md:flex items-center gap-3">
             {user ? (
-              <div className="relative" ref={userRef}>
+              <>
+                <NotificationBell />
+                <div className="relative" ref={userRef}>
                 <button
                   type="button"
                   onClick={() => setUserOpen(!userOpen)}
@@ -163,8 +218,11 @@ export const Navbar: React.FC = () => {
                     <Link to="/profile" onClick={() => setUserOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-slate-100 font-medium">
                       <User className="w-4 h-4 text-slate-500" /> My Profile & Delivery
                     </Link>
-                    <Link to="/sell/wallet" onClick={() => setUserOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-slate-100 text-emerald-700 font-bold">
-                      <ShoppingBag className="w-4 h-4 text-emerald-600" /> My Wallet
+                    <Link to="/buy/wallets" onClick={() => setUserOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-slate-100 text-emerald-700 font-bold">
+                      <Wallet className="w-4 h-4 text-emerald-600" /> Buyer Spending Wallet
+                    </Link>
+                    <Link to="/sell/sales-balance" onClick={() => setUserOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-slate-100 text-purple-700 font-bold">
+                      <Store className="w-4 h-4 text-purple-600" /> Seller Sales Balance
                     </Link>
                     <div className="border-t border-slate-100 my-1"></div>
                     <button
@@ -177,6 +235,7 @@ export const Navbar: React.FC = () => {
                   </div>
                 )}
               </div>
+              </>
             ) : (
               <div className="flex items-center gap-2">
                 <Link to="/login" className="px-4 py-2 text-sm text-slate-200 hover:text-white font-medium">
@@ -222,12 +281,20 @@ export const Navbar: React.FC = () => {
               <div className="pt-2 border-t border-blue-900/40 text-[11px] font-bold uppercase text-cu-gold">Student Dashboard</div>
               <Link to="/profile" onClick={() => setMobileOpen(false)} className="block py-1">My Account Profile</Link>
               <Link to="/buy/saved" onClick={() => setMobileOpen(false)} className="block py-1">Saved Items</Link>
+              <Link to="/buy/wallets" onClick={() => setMobileOpen(false)} className="block py-1 text-emerald-400 font-bold">Wallets (Spending)</Link>
               <Link to="/buy/pending" onClick={() => setMobileOpen(false)} className="block py-1">Pending Purchases</Link>
               <Link to="/sell/add" onClick={() => setMobileOpen(false)} className="block py-1 text-cu-gold font-bold">Add Item for Sale</Link>
               <Link to="/sell/catalogue" onClick={() => setMobileOpen(false)} className="block py-1">Sales Catalogue</Link>
               <Link to="/sell/pending" onClick={() => setMobileOpen(false)} className="block py-1">Pending Sales</Link>
-              <Link to="/sell/wallet" onClick={() => setMobileOpen(false)} className="block py-1 text-emerald-300 font-bold">Wallet & Balance</Link>
-              <Link to="/messages" onClick={() => setMobileOpen(false)} className="block py-1">Messages</Link>
+              <Link to="/sell/sales-balance" onClick={() => setMobileOpen(false)} className="block py-1 text-purple-300 font-bold">Sales Balance</Link>
+              <Link to="/messages" onClick={() => setMobileOpen(false)} className="flex items-center justify-between py-1">
+                <span>Messages</span>
+                {unreadMessages > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
+                    {unreadMessages}
+                  </span>
+                )}
+              </Link>
               {user.role === 'admin' && (
                 <Link to="/admin" onClick={() => setMobileOpen(false)} className="block py-1 text-amber-300 font-bold">Admin Portal</Link>
               )}

@@ -105,6 +105,7 @@ export interface Conversation {
   sellerName?: string;
   lastMessageSnippet: string;
   lastMessageAt: string;
+  unreadCount?: number;
   createdAt: string;
 }
 
@@ -139,7 +140,7 @@ export interface Order {
   sellerName?: string;
   amount: number;
   status: OrderStatus;
-  paymentMode: 'TEST_MODE' | 'PAYPAL';
+  paymentMode: 'TEST_MODE' | 'PAYPAL' | 'WALLET_ESCROW';
   paymentRef: string;
   deliveryFullName: string;
   deliveryGender: Gender;
@@ -152,14 +153,48 @@ export interface Order {
   updatedAt: string;
 }
 
-export interface Wallet {
+// Buyer Spending Wallet
+export interface BuyerWallet {
   walletId: string;
+  userId: string;
+  availableBalance: number;
+  updatedAt: string;
+}
+
+// Legacy alias for compatibility
+export type Wallet = BuyerWallet;
+
+export interface WalletTransaction {
+  transactionId: string;
+  userId: string;
+  type: 'topup' | 'purchase_deduction';
+  amount: number;
+  reference: string;
+  status: 'successful' | 'pending' | 'failed';
+  description: string;
+  createdAt: string;
+}
+
+// Seller Sales Balance
+export interface SellerBalance {
+  salesBalanceId: string;
   userId: string;
   availableBalance: number;
   pendingBalance: number;
   totalEarnings: number;
   totalWithdrawals: number;
   updatedAt: string;
+}
+
+export interface SalesTransaction {
+  transactionId: string;
+  sellerId: string;
+  orderId?: string;
+  orderReference?: string;
+  amount: number;
+  type: 'pending_sale' | 'released_sale' | 'withdrawal';
+  status: 'pending' | 'completed' | 'disputed';
+  createdAt: string;
 }
 
 export type WithdrawalStatus = 'pending' | 'approved' | 'rejected' | 'processed';
@@ -176,5 +211,16 @@ export interface WithdrawalRequest {
   status: WithdrawalStatus;
   adminNotes: string;
   processedAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationItem {
+  notificationId: string;
+  userId: string;
+  title: string;
+  message: string;
+  type: 'order' | 'message' | 'wallet' | 'sales' | 'admin';
+  destinationUrl: string;
+  isRead: boolean;
   createdAt: string;
 }

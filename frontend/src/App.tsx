@@ -13,6 +13,8 @@ import { AddItem } from './pages/AddItem';
 import { SalesCatalogue } from './pages/SalesCatalogue';
 import { PendingSales } from './pages/PendingSales';
 import { SalesHistory } from './pages/SalesHistory';
+import { BuyerWalletPage } from './pages/BuyerWallet';
+import { SalesBalancePage } from './pages/SalesBalance';
 import { Wallet } from './pages/Wallet';
 import { Messages } from './pages/Messages';
 import { Guidelines } from './pages/Guidelines';
@@ -55,6 +57,7 @@ export const AppContent: React.FC = () => {
           {/* Protected routes guarded against unauthenticated access */}
           <Route path="/profile" element={<ProtectedRoute><Profile onToast={showToast} /></ProtectedRoute>} />
           <Route path="/buy/saved" element={<ProtectedRoute><SavedItems onToast={showToast} /></ProtectedRoute>} />
+          <Route path="/buy/wallets" element={<ProtectedRoute><BuyerWalletPage onToast={showToast} /></ProtectedRoute>} />
           <Route path="/checkout/:productId" element={<ProtectedRoute><Checkout onToast={showToast} /></ProtectedRoute>} />
           <Route path="/buy/pending" element={<ProtectedRoute><PendingPurchases onToast={showToast} /></ProtectedRoute>} />
           <Route path="/buy/history" element={<ProtectedRoute><PurchaseHistory onToast={showToast} /></ProtectedRoute>} />
@@ -62,6 +65,7 @@ export const AppContent: React.FC = () => {
           <Route path="/sell/catalogue" element={<ProtectedRoute><SalesCatalogue onToast={showToast} /></ProtectedRoute>} />
           <Route path="/sell/pending" element={<ProtectedRoute><PendingSales onToast={showToast} /></ProtectedRoute>} />
           <Route path="/sell/history" element={<ProtectedRoute><SalesHistory onToast={showToast} /></ProtectedRoute>} />
+          <Route path="/sell/sales-balance" element={<ProtectedRoute><SalesBalancePage onToast={showToast} /></ProtectedRoute>} />
           <Route path="/sell/wallet" element={<ProtectedRoute><Wallet onToast={showToast} /></ProtectedRoute>} />
           <Route path="/messages" element={<ProtectedRoute><Messages onToast={showToast} /></ProtectedRoute>} />
 

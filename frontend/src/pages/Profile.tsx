@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { User, Mail, Hash, ShieldCheck, Home, Edit3, Save, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Mail, Hash, ShieldCheck, Home, Edit3, Save, X, Bell, Smartphone, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { Gender, Hall } from '../types';
+import { requestNotificationPermissionAndSubscribe, isIosDevice, isStandalonePwa } from '../utils/pushNotifications';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
 const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah'];
@@ -15,6 +16,27 @@ export const Profile: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
   const [hall, setHall] = useState<Hall>(user?.hallOfResidence || 'Peter');
   const [roomNumber, setRoomNumber] = useState(user?.roomNumber || '');
   const [saving, setSaving] = useState(false);
+  const [pushStatus, setPushStatus] = useState<string>('default');
+  const [pushLoading, setPushLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setPushStatus(Notification.permission);
+    }
+  }, []);
+
+  const handleEnablePush = async () => {
+    if (!user) return;
+    setPushLoading(true);
+    const result = await requestNotificationPermissionAndSubscribe(user.userId);
+    setPushStatus(result.status);
+    if (result.success) {
+      onToast('success', 'Browser push notifications enabled successfully!');
+    } else {
+      onToast('error', result.error || 'Failed to enable push notifications.');
+    }
+    setPushLoading(false);
+  };
 
   if (!user) {
     return <div className="text-center py-16 text-slate-400">Loading user profile...</div>;
@@ -235,6 +257,62 @@ export const Profile: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
           </div>
         </div>
       )}
+
+      {/* Browser Push Notifications Settings Card */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-cu-gold/20 text-cu-gold flex items-center justify-center font-bold">
+              <Bell className="w-5 h-5 text-cu-blue" />
+            </div>
+            <div>
+              <h2 className="text-base font-extrabold text-slate-900">Browser Push Notifications</h2>
+              <p className="text-xs text-slate-500">
+                Receive instant alerts for buyer inquiries, order confirmations, and balance releases even when off-site.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleEnablePush}
+            disabled={pushLoading || pushStatus === 'granted'}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm ${
+              pushStatus === 'granted'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
+                : 'bg-cu-blue hover:bg-cu-dark text-white'
+            }`}
+          >
+            {pushStatus === 'granted' ? (
+              <>
+                <CheckCircle className="w-4 h-4 text-emerald-600" /> Notifications Active
+              </>
+            ) : pushLoading ? (
+              'Enabling...'
+            ) : (
+              <>
+                <Bell className="w-4 h-4" /> Enable Push Notifications
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Mobile iOS / Android Compatibility Notice */}
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs space-y-2 text-slate-700">
+          <div className="flex items-center gap-2 font-bold text-slate-900">
+            <Smartphone className="w-4 h-4 text-cu-blue" />
+            <span>Mobile Device Guidelines (Android & iOS)</span>
+          </div>
+          <ul className="list-disc pl-5 space-y-1 text-[11px] text-slate-600">
+            <li>
+              <b>Android Chrome:</b> Tap "Enable Push Notifications" and select "Allow" when prompted by your browser.
+            </li>
+            <li>
+              <b>iOS Safari (iPhone / iPad):</b> Apple requires adding eBron to your Home Screen to receive Web Push. Tap the Safari Share button (<span className="font-mono">⎋</span>) &gt; select <b>"Add to Home Screen"</b>, then open the eBron app from your home screen and enable notifications here.
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
   );
 };
