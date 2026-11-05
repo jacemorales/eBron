@@ -64,57 +64,111 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
 
 ## D. Google Sheets Database Blueprint & Configuration
 
-The primary database is Google Sheets. You can either use the automatic setup function in Apps Script or manually create the sheets with the exact headers specified below.
+The primary database is Google Sheets. You can either run the automatic `setupDatabase()` function in Google Apps Script (`backend/Code.gs` or `backend/Setup.js`) or manually create the sheets with the exact headers specified below.
+
+> **Key Financial Architecture – Separation of Balances:**
+> To eliminate confusion and prevent fraud, eBron enforces a strict architectural separation between **Buyer Spending Wallets** and **Seller Sales Balances**:
+> 1. **`Wallets` & `WalletTransactions`**: Dedicated exclusively to buyer shopping capital. Funds added via top-up are locked for campus marketplace purchases and cannot be withdrawn.
+> 2. **`SalesBalances` & `SalesTransactions`**: Dedicated exclusively to seller earnings. Revenue from sales is initially held in pending status until two-step confirmation (handover + receipt), after which it enters available sales balance and is eligible for bank withdrawal.
+
+---
 
 ### Sheet 1: `Users`
-- **Purpose**: Stores student and administrator credentials, profiles, and delivery settings.
+- **Purpose**: Stores student and administrator credentials, profiles, hall assignments, and authorization roles.
 - **Columns (in exact order)**:
   `userId`, `fullName`, `regNumber`, `matricNumber`, `schoolEmail`, `gender`, `hallOfResidence`, `roomNumber`, `passwordHash`, `salt`, `role`, `status`, `createdAt`, `updatedAt`
+- **Notes**: `role` can be `student` or `admin`. Passwords are encrypted with PBKDF2/SHA-256 and unique salts; plaintext passwords are never stored.
 
 ### Sheet 2: `Products`
-- **Purpose**: Marketplace listings with images, descriptions, pricing, optional stock number, and soft-delete flags.
+- **Purpose**: Marketplace product catalog with pricing, condition, availability, and soft-delete flags.
 - **Columns (in exact order)**:
-  `productId`, `sellerId`, `sellerName`, `sellerEmail`, `name`, `description`, `category`, `price`, `condition`, `stockNumber`, `primaryImageUrl`, `images`, `availability`, `status`, `viewsCount`, `deletedBy`, `deletedAt`, `createdAt`, `updatedAt`
+  `productId`, `sellerId`, `name`, `description`, `category`, `price`, `condition`, `stockNumber`, `primaryImageUrl`, `availability`, `status`, `viewsCount`, `createdAt`, `updatedAt`
+- **Notes**: `availability` is `available`, `sold`, or `reserved`. `status` is `active` or `deleted` (preserving records via soft deletion).
 
-### Sheet 3: `SavedItems`
+### Sheet 3: `ProductImages`
+- **Purpose**: Gallery images for product listings, supporting multiple images per product.
+- **Columns (in exact order)**:
+  `imageId`, `productId`, `imageUrl`, `isPrimary`, `createdAt`
+
+### Sheet 4: `SavedItems`
 - **Purpose**: Student wishlists and bookmarked products.
 - **Columns (in exact order)**:
   `savedId`, `userId`, `productId`, `createdAt`
 
-### Sheet 4: `Conversations`
-- **Purpose**: Direct chat threads between buyers and sellers linked to products.
+### Sheet 5: `Conversations`
+- **Purpose**: Direct buyer-seller chat threads linked to specific marketplace products.
 - **Columns (in exact order)**:
-  `conversationId`, `productId`, `productName`, `productPrice`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `lastMessageSnippet`, `lastMessageAt`, `createdAt`
+  `conversationId`, `productId`, `buyerId`, `sellerId`, `lastMessageSnippet`, `lastMessageAt`, `createdAt`
 
-### Sheet 5: `Messages`
-- **Purpose**: Individual messages within a conversation.
+### Sheet 6: `Messages`
+- **Purpose**: Individual messages exchanged within a conversation thread.
 - **Columns (in exact order)**:
   `messageId`, `conversationId`, `senderId`, `receiverId`, `content`, `isRead`, `createdAt`
 
-### Sheet 6: `Orders`
-- **Purpose**: Orders, delivery snapshots, test payment simulation, and dual-party confirmation timestamps.
+### Sheet 7: `Orders`
+- **Purpose**: Purchase transactions, immutable delivery snapshots, test payment simulation flags, and dual-party confirmation timestamps.
 - **Columns (in exact order)**:
-  `orderId`, `orderReference`, `productId`, `productName`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `amount`, `status`, `paymentMode`, `paymentRef`, `deliveryFullName`, `deliveryGender`, `deliveryHall`, `deliveryRoom`, `sellerConfirmedAt`, `buyerConfirmedAt`, `completedAt`, `disputeReason`, `createdAt`, `updatedAt`
+  `orderId`, `orderReference`, `productId`, `buyerId`, `sellerId`, `amount`, `status`, `paymentMode`, `paymentRef`, `deliveryFullName`, `deliveryGender`, `deliveryHall`, `deliveryRoom`, `sellerConfirmedAt`, `buyerConfirmedAt`, `completedAt`, `createdAt`, `updatedAt`
+- **Notes**: `status` transitions: `awaiting_payment` → `payment_successful` → `awaiting_seller_confirmation` / `awaiting_buyer_confirmation` → `completed` (or `cancelled` / `disputed`).
 
-### Sheet 7: `Wallets`
-- **Purpose**: Student wallet balances (Available Balance, Pending Balance, Total Earnings, Total Withdrawals).
+### Sheet 8: `Transactions`
+- **Purpose**: Global platform ledger tracking all monetary movements and confirmation events.
 - **Columns (in exact order)**:
-  `walletId`, `userId`, `availableBalance`, `pendingBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
+  `transactionId`, `orderId`, `orderReference`, `type`, `fromUserId`, `toUserId`, `amount`, `status`, `mode`, `notes`, `createdAt`
+- **Notes**: `type` can be `payment`, `escrow_hold`, `balance_release`, or `withdrawal`.
 
-### Sheet 8: `WithdrawalRequests`
-- **Purpose**: Payout requests submitted by students to receive money in their bank accounts.
+### Sheet 9: `Wallets` (Buyer Spending Account)
+- **Purpose**: Tracks student buyer purchasing balances. Funds here are strictly used for buying items on eBron.
 - **Columns (in exact order)**:
-  `requestId`, `userId`, `userName`, `userEmail`, `amount`, `bankName`, `accountNumber`, `accountName`, `status`, `adminNotes`, `processedAt`, `createdAt`
+  `walletId`, `userId`, `availableBalance`, `updatedAt`
+- **Notes**: Only buyer spending funds reside here. Automatically created with `0` balance on first user activity.
 
-### Sheet 9: `Reports`
-- **Purpose**: Product listing complaints and moderation reports submitted by students for administrator investigation.
+### Sheet 10: `WalletTransactions` (Buyer Top-ups & Deductions)
+- **Purpose**: Audit trail for buyer wallet funding (via Paystack simulation/live) and order purchase deductions.
+- **Columns (in exact order)**:
+  `transactionId`, `userId`, `type`, `amount`, `reference`, `status`, `description`, `createdAt`
+- **Notes**: `type` is either `topup` or `purchase_deduction`.
+
+### Sheet 11: `SalesBalances` (Seller Earnings Account)
+- **Purpose**: Tracks seller revenue from sold products, separating pending sales from withdrawable earnings.
+- **Columns (in exact order)**:
+  `salesBalanceId`, `userId`, `availableBalance`, `pendingBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
+- **Notes**:
+  - `pendingBalance`: Sales amount currently held awaiting dual confirmation (seller handover + buyer receipt).
+  - `availableBalance`: Confirmed sales revenue released and eligible for bank withdrawal.
+  - Corresponds 100% to verified seller order records.
+
+### Sheet 12: `SalesTransactions` (Seller Income Ledger)
+- **Purpose**: Granular ledger of seller sales credits, funds releases upon dual confirmation, and processed withdrawals.
+- **Columns (in exact order)**:
+  `transactionId`, `sellerId`, `orderId`, `orderReference`, `amount`, `type`, `status`, `createdAt`
+- **Notes**: `type` is `pending_sale`, `released_sale`, or `withdrawal`.
+
+### Sheet 13: `WithdrawalRequests`
+- **Purpose**: Bank payout requests submitted by sellers from their available sales balance.
+- **Columns (in exact order)**:
+  `requestId`, `userId`, `amount`, `bankName`, `accountNumber`, `accountName`, `status`, `adminNotes`, `processedAt`, `createdAt`
+- **Notes**: `status` can be `pending`, `approved`, `rejected`, or `processed`.
+
+### Sheet 14: `Notifications`
+- **Purpose**: In-app notifications for order updates, message receipts, balance releases, and administrative alerts.
+- **Columns (in exact order)**:
+  `notificationId`, `userId`, `title`, `message`, `type`, `destinationUrl`, `isRead`, `createdAt`
+
+### Sheet 15: `NotificationSubscriptions`
+- **Purpose**: Web push notification subscription tokens for real-time mobile/desktop alerts.
+- **Columns (in exact order)**:
+  `subscriptionId`, `userId`, `endpoint`, `p256dh`, `auth`, `enabled`, `createdAt`, `updatedAt`
+
+### Sheet 16: `Reports`
+- **Purpose**: Product listing complaints and scam reports submitted by students for administrator investigation.
 - **Columns (in exact order)**:
   `reportId`, `productId`, `productName`, `productStockNumber`, `productImage`, `sellerId`, `sellerName`, `reporterId`, `reporterEmail`, `category`, `explanation`, `status`, `adminNotes`, `createdAt`, `updatedAt`
 
-### Sheet 10: `AnalyticsEvents`
-- **Purpose**: Historical timestamp logs for platform events and analytics tracking.
+### Sheet 17: `AdminLogs`
+- **Purpose**: Audit trail of administrative actions (suspensions, product takedowns/restorations, withdrawal processing).
 - **Columns (in exact order)**:
-  `eventId`, `eventType`, `userId`, `amount`, `details`, `createdAt`
+  `logId`, `adminId`, `action`, `details`, `targetId`, `ipAddress`, `createdAt`
 
 ---
 
