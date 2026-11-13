@@ -1,0 +1,322 @@
+# eBron – Covenant University Student Marketplace
+
+eBron is an eBay-inspired student marketplace designed exclusively for students of Covenant University. It provides a unified platform for students to buy, sell, save items, communicate in real-time, confirm hostel deliveries, and transact securely through a two-step transaction confirmation protection system.
+
+---
+
+## A. Project Overview
+
+- **Purpose**: A dedicated university marketplace enabling verified Covenant University students to buy and sell textbooks, electronics, hostel provisions, and essentials safely.
+- **Key Features**:
+  - Unified accounts: every registered student has access to both buying and selling functions without creating separate accounts.
+  - Institutional email verification: strictly accepts `@stu.cu.edu.ng` emails.
+  - Dynamic gender-based hostel assignment: Male (Peter, John, Paul, Daniel, Joseph, Joshua); Female (Mary, Lydia, Deborah).
+  - **Two-Step Transaction Protection**: buyers fund their wallet with Paystack and pay from their spending balance; funds sit in seller's *Pending Balance* and are only released to *Available Balance* after both parties confirm handover and receipt.
+  - Comprehensive Admin Portal with live analytics calculated from real records across Daily, Weekly, and Monthly timeframes.
+  - **Admin Transactions Monitor**: a dedicated administrator tab that surfaces every buyer `WalletTransactions` record (top-ups and purchase deductions) and every seller `SalesTransactions` record (pending sales, released sales, withdrawals) in one place.
+- **Technologies Used**:
+  - **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide React, React Router DOM, Vite.
+  - **Backend**: Google Apps Script (GAS) Web App (`backend/Code.gs`).
+  - **Primary Database**: Google Sheets.
+
+---
+
+## B. Prerequisites
+
+1. **Node.js**: v18.0.0 or higher (v20+ recommended).
+2. **Google Account**: with access to Google Drive and Google Sheets.
+3. **Browser**: Modern web browser (Chrome, Firefox, Safari, Edge).
+
+---
+
+## C. Installation & Local Setup
+
+1. **Clone or Download the Repository**:
+   ```bash
+   git clone <repo-url>
+   cd <repo-folder>
+   ```
+
+2. **Install Frontend Dependencies**:
+   ```bash
+   cd frontend
+   npm install
+   ```
+
+3. **Configure Frontend Environment**:
+   Create a `.env` file in the `frontend/` directory and configure your Google Apps Script Web App URL and Paystack public key:
+   ```bash
+   VITE_API_URL=https://script.google.com/macros/s/<YOUR_APPS_SCRIPT_DEPLOYMENT_ID>/exec
+   VITE_PAYSTACK_PUBLIC_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+   > **Note on Backend Communication:** eBron communicates directly with Google Apps Script and Google Sheets. All actions (registering accounts, authenticating, listing items, saving wishlists, placing orders, and balance confirmations) send live HTTP requests to this URL. Ensure `VITE_API_URL` is set before testing registration or login.
+   > **Note on Paystack:** Wallet top-up uses Paystack Inline checkout. `VITE_PAYSTACK_PUBLIC_KEY` must be a real Paystack public key (`pk_test_...` for testing, `pk_live_...` for production); there is no simulated/demo top-up path.
+
+4. **Start Development Server**:
+   ```bash
+   npm run dev
+   ```
+   Open `http://localhost:3000` in your browser.
+
+5. **Build for Production**:
+   ```bash
+   npm run build
+   ```
+
+---
+
+## D. Google Sheets Database Blueprint & Configuration
+
+The primary database is Google Sheets. You can either run the automatic `setupDatabase()` function in Google Apps Script (`backend/Code.gs` or `backend/Setup.js`) or manually create the sheets with the exact headers specified below.
+
+> **Consolidated sheet layout:** To keep the spreadsheet easy to monitor and maintain, related data is consolidated into shared sheets:
+> - **Chat threads and messages now live in a single `Messages` sheet.** Conversation rows have an empty `messageId` and hold the product/participant details; message rows have a `messageId` and hold the sender, receiver and content.
+> - **In-app notifications and web-push subscriptions now live in a single `Notifications` sheet.** Notification rows have a `notificationId`; subscription rows have a `subscriptionId` and `title = 'PUSH_SUBSCRIPTION'`.
+> - **The standalone `Transactions` ledger has been removed.** Every monetary movement is already captured by the dedicated `WalletTransactions` (buyer) and `SalesTransactions` (seller) ledgers.
+>
+> Running `setupDatabase()` also automatically **deletes the retired** `Conversations`, `NotificationSubscriptions`, and `Transactions` sheets if they still exist, so a fresh deployment drops from 17 to 14 sheets.
+
+> **Key Financial Architecture – Separation of Balances:**
+> To eliminate confusion and prevent fraud, eBron enforces a strict architectural separation between **Buyer Spending Wallets** and **Seller Sales Balances**:
+> 1. **`Wallets` & `WalletTransactions`**: Dedicated exclusively to buyer shopping capital. Funds added via top-up are locked for campus marketplace purchases and cannot be withdrawn.
+> 2. **`SalesBalances` & `SalesTransactions`**: Dedicated exclusively to seller earnings. Revenue from sales is initially held in pending status until two-step confirmation (handover + receipt), after which it enters available sales balance and is eligible for bank withdrawal.
+
+---
+
+### Sheet 1: `Users`
+- **Purpose**: Stores student and administrator credentials, profiles, hall assignments, and authorization roles.
+- **Columns (in exact order)**:
+  `userId`, `fullName`, `regNumber`, `matricNumber`, `schoolEmail`, `gender`, `hallOfResidence`, `roomNumber`, `passwordHash`, `salt`, `role`, `status`, `createdAt`, `updatedAt`
+- **Why the `salt` column is critical**:
+  In a university marketplace handling payments and student identity, passwords must never be stored as simple hashes. A **cryptographic salt** is a unique, cryptographically random string generated per-account. When combined with the student's password prior to SHA-256 hashing (`SHA-256(password + salt)`), it guarantees:
+  1. Identical passwords chosen by different students generate completely different hashes.
+  2. Pre-computed rainbow tables and brute-force dictionary attacks are rendered completely useless.
+  3. Safe verification: the server retrieves the user's salt, hashes the incoming password attempt, and compares hashes without ever revealing or storing plaintext passwords.
+
+### Sheet 2: `Products`
+- **Purpose**: Marketplace product catalog with pricing, condition, availability, and soft-delete flags.
+- **Columns (in exact order)**:
+  `productId`, `sellerId`, `name`, `description`, `category`, `price`, `condition`, `stockNumber`, `primaryImageUrl`, `availability`, `status`, `viewsCount`, `createdAt`, `updatedAt`
+- **Notes**: `availability` is `available`, `sold`, or `reserved`. `status` is `active` or `deleted` (preserving records via soft deletion).
+
+### Sheet 3: `ProductImages`
+- **Purpose**: Gallery images for product listings, supporting multiple images per product.
+- **Columns (in exact order)**:
+  `imageId`, `productId`, `imageUrl`, `isPrimary`, `createdAt`
+
+### Sheet 4: `SavedItems`
+- **Purpose**: Student wishlists and bookmarked products.
+- **Columns (in exact order)**:
+  `savedId`, `userId`, `productId`, `createdAt`
+
+### Sheet 5: `Messages` (Consolidated Chat + Conversations)
+- **Purpose**: Unified chat store holding **both** conversation threads and the individual messages exchanged inside them. This replaces the former separate `Conversations` and `Messages` sheets.
+- **Columns (in exact order)**:
+  `conversationId`, `messageId`, `productId`, `productName`, `productPrice`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `senderId`, `receiverId`, `content`, `isRead`, `createdAt`
+- **Row conventions**:
+  - **Conversation row** (thread metadata): `messageId` is empty; the product and participant columns (`productId`, `buyerId`, `sellerId`, etc.) are populated.
+  - **Message row**: `messageId` is populated together with `senderId`, `receiverId`, `content`, and `isRead`; the product/participant columns are left empty.
+- **Notes**: The conversation list derives each thread's `lastMessageSnippet` / `lastMessageAt` and unread counts from its message rows, so no separate summary columns are needed.
+
+### Sheet 6: `Orders`
+- **Purpose**: Purchase transactions, immutable delivery snapshots, payment mode, and dual-party confirmation timestamps.
+- **Columns (in exact order)**:
+  `orderId`, `orderReference`, `productId`, `productName`, `productImage`, `buyerId`, `buyerName`, `sellerId`, `sellerName`, `amount`, `status`, `paymentMode`, `paymentRef`, `deliveryFullName`, `deliveryGender`, `deliveryHall`, `deliveryRoom`, `sellerConfirmedAt`, `buyerConfirmedAt`, `completedAt`, `disputeReason`, `createdAt`, `updatedAt`
+- **Notes**: `status` transitions: `awaiting_payment` → `payment_successful` → `awaiting_seller_confirmation` / `awaiting_buyer_confirmation` → `completed` (or `cancelled` / `disputed`). `paymentMode` is `WALLET_ESCROW` (funds paid from the buyer's spending wallet) or `PAYPAL`.
+
+### Sheet 7: `Wallets` (Buyer Spending Account)
+- **Purpose**: Tracks student buyer purchasing balances. Funds here are strictly used for buying items on eBron.
+- **Columns (in exact order)**:
+  `walletId`, `userId`, `availableBalance`, `updatedAt`
+- **Notes**: Only buyer spending funds reside here. Automatically created with `0` balance on first user activity.
+
+### Sheet 8: `WalletTransactions` (Buyer Top-ups & Deductions)
+- **Purpose**: Audit trail for buyer wallet funding (via verified Paystack top-up) and order purchase deductions.
+- **Columns (in exact order)**:
+  `transactionId`, `userId`, `type`, `amount`, `reference`, `status`, `description`, `createdAt`
+- **Notes**: `type` is either `topup` or `purchase_deduction`. **Every successful wallet top-up is recorded here** (the Paystack `reference` is the unique idempotency key), and purchase deductions are recorded here as well.
+
+### Sheet 9: `SalesBalances` (Seller Earnings Account)
+- **Purpose**: Tracks seller revenue from sold products, separating pending sales from withdrawable earnings.
+- **Columns (in exact order)**:
+  `salesBalanceId`, `userId`, `availableBalance`, `pendingBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
+- **Notes**:
+  - `pendingBalance`: Sales amount currently held awaiting dual confirmation (seller handover + buyer receipt).
+  - `availableBalance`: Confirmed sales revenue released and eligible for bank withdrawal.
+  - Corresponds 100% to verified seller order records.
+
+### Sheet 10: `SalesTransactions` (Seller Income Ledger)
+- **Purpose**: Granular ledger of seller sales credits, funds releases upon dual confirmation, and processed withdrawals.
+- **Columns (in exact order)**:
+  `transactionId`, `sellerId`, `orderId`, `orderReference`, `amount`, `type`, `status`, `createdAt`
+- **Notes**: `type` is `pending_sale`, `released_sale`, or `withdrawal`. A `pending_sale` row is written on every purchase and a `released_sale` row on every completed dual confirmation, guaranteeing the same reliability as `WalletTransactions`.
+
+### Sheet 11: `WithdrawalRequests`
+- **Purpose**: Bank payout requests submitted by sellers from their available sales balance.
+- **Columns (in exact order)**:
+  `requestId`, `userId`, `userName`, `userEmail`, `amount`, `bankName`, `accountNumber`, `accountName`, `status`, `adminNotes`, `processedAt`, `createdAt`
+- **Notes**: `status` can be `pending`, `approved`, `rejected`, or `processed`.
+
+### Sheet 12: `Notifications` (Consolidated Notifications + Subscriptions)
+- **Purpose**: Unified store for in-app notifications (order updates, message receipts, balance releases, admin alerts) **and** web-push subscription tokens. This replaces the former separate `Notifications` and `NotificationSubscriptions` sheets.
+- **Columns (in exact order)**:
+  `notificationId`, `userId`, `title`, `message`, `type`, `destinationUrl`, `isRead`, `createdAt`, `subscriptionId`, `endpoint`, `p256dh`, `auth`, `enabled`, `updatedAt`
+- **Row conventions**:
+  - **Notification row**: `notificationId` is populated; `subscriptionId` / `endpoint` / `p256dh` / `auth` are empty.
+  - **Subscription row**: `subscriptionId`, `endpoint`, `p256dh`, `auth`, and `enabled` are populated, `title` is `'PUSH_SUBSCRIPTION'`, and `notificationId` is empty.
+
+### Sheet 13: `Reports`
+- **Purpose**: Product listing complaints and scam reports submitted by students for administrator investigation.
+- **Columns (in exact order)**:
+  `reportId`, `productId`, `productName`, `productStockNumber`, `productImage`, `sellerId`, `sellerName`, `reporterId`, `reporterEmail`, `category`, `explanation`, `status`, `adminNotes`, `createdAt`, `updatedAt`
+
+### Sheet 14: `AdminLogs`
+- **Purpose**: Audit trail of administrative actions (suspensions, product takedowns/restorations, withdrawal processing).
+- **Columns (in exact order)**:
+  `logId`, `adminId`, `action`, `details`, `targetId`, `ipAddress`, `createdAt`
+
+---
+
+## E. Google Apps Script Deployment
+
+1. Open your Google Spreadsheet in Google Drive.
+2. Click **Extensions > Apps Script**.
+3. Clear any existing code and copy the entire contents of `backend/Code.gs` into the editor.
+4. Set the `SPREADSHEET_ID` variable in `backend/Code.gs` to your Google Spreadsheet ID (or leave it bound to the active spreadsheet).
+5. Set the `PAYSTACK_SECRET_KEY` variable in `backend/Code.gs` to your Paystack secret key (`sk_test_...` for testing, `sk_live_...` for production). This enables server-side verification of every wallet top-up so balances can never be inflated by the client. Never expose this key in the frontend.
+6. In the Apps Script toolbar, select `setupDatabase` and click **Run**.
+7. When prompted, click **Review permissions**, choose your Google Account, click **Advanced**, and then click **Go to Untitled project (unsafe)** to grant spreadsheet access.
+8. Click **Deploy > New deployment**:
+   - **Select type**: `Web app`
+   - **Description**: `eBron Production API v1`
+   - **Execute as**: `Me (your email)`
+   - **Who has access**: `Anyone` *(Critical: Allows your frontend application to call the endpoint)*
+9. Click **Deploy**. Copy the provided **Web app URL** (e.g. `https://script.google.com/macros/s/.../exec`).
+10. Paste this URL into `frontend/.env` as `VITE_API_URL`.
+11. **Redeploying after updates**: Whenever you change `Code.gs`, click **Deploy > Manage deployments > Edit > New version > Deploy**.
+
+---
+
+## F. Administrator Setup
+
+Administrator details are stored and verified directly in the `Users` sheet in Google Sheets (with `role: "admin"`). No administrator passwords or credentials are hardcoded into the frontend.
+
+### Initial Administrator Record Template
+Copy and paste this row directly into row 2 of the `Users` sheet (or append to the end):
+
+| Column | Value |
+|---|---|
+| `userId` | `u_admin_001` |
+| `fullName` | `Covenant University Admin` |
+| `regNumber` | `ADM/2026/01` |
+| `matricNumber` | `CU/ADM/001` |
+| `schoolEmail` | `admin@stu.cu.edu.ng` |
+| `gender` | `Male` |
+| `hallOfResidence` | `Peter` |
+| `roomNumber` | `AdminSuite1` |
+| `passwordHash` | `414777a8848d6db3866b1a13e2bb97f5a9f242d5e272a8069502b489a202dfb8` |
+| `salt` | `covenant_admin_salt` |
+| `role` | `admin` |
+| `status` | `active` |
+| `createdAt` | `2026-11-01T00:00:00.000Z` |
+| `updatedAt` | `2026-11-01T00:00:00.000Z` |
+
+*(The template hash above corresponds to password: `AdminPassword123!`)*
+
+---
+
+## G. Image Hosting Configuration
+
+When uploading multiple product images, sellers can either paste valid image URLs or upload files. The application converts uploaded local images into standard data URIs and persists them into the `Products` sheet. For external image hosting (e.g., Cloudinary or Imgur), provide your CDN credentials in `frontend/.env` and configure direct URL uploads.
+
+---
+
+## H. Troubleshooting & Common Errors
+
+### Error 1: CORS Policy / Preflight Blocked
+- **Symptoms**:
+  `Access to fetch at 'https://script.google.com/...' from origin 'http://localhost:3000' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.`
+- **Cause**: Google Apps Script Web Apps do not respond to browser preflight HTTP `OPTIONS` requests. If the browser sends `Content-Type: application/json` or custom headers, the preflight request fails with CORS.
+- **Solution**:
+  In `frontend/src/services/api.ts`, all POST requests are sent with `headers: { 'Content-Type': 'text/plain;charset=utf-8' }` with a stringified JSON body. This treats the request as a simple request without triggering an `OPTIONS` preflight, allowing Google Apps Script to process the request and return JSON with standard CORS headers.
+
+### Error 2: Undefined Query Parameters in URL
+- **Symptoms**:
+  `?action=getProducts&category=undefined&search=undefined`
+- **Cause**: Optional React state variables passed as parameters evaluate to `"undefined"` strings when appended naively to URL search params.
+- **Solution**:
+  The `sanitizeParams()` helper in `frontend/src/services/api.ts` filters out any keys whose values are `undefined`, `null`, empty string, or literal `"undefined"` before building URL query strings.
+
+### Error 3: Local Persistence Fallback Errors
+- **Symptoms**:
+  `GAS endpoint call error, using local persistence fallback: TypeError: Failed to fetch`
+- **Cause**: Previous code tried to fallback to `localStorage` when network requests failed, violating the requirement to use Google Sheets as the sole source of truth.
+- **Solution**:
+  All `localStorage` fallback databases have been completely removed. If Google Apps Script is unreachable or `VITE_API_URL` is missing, the application returns a clear error message prompting the user to verify their network or Apps Script configuration.
+
+### Error 4: Registration Preflight Failure
+- **Symptoms**:
+  `Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present.`
+- **Cause**: Registration POST payload was previously dispatched with `application/json`, which triggered an unhandled CORS preflight in Google Apps Script.
+- **Solution**:
+  The `api.register()` method now uses `text/plain;charset=utf-8` payload serialization, cleanly processed by `doPost(e)` in `backend/Code.gs`.
+
+### Error 5: Wallet Request Failure
+- **Symptoms**:
+  `getWallet&userId=... failed`
+- **Cause**: Wallet queries failing due to nonexistent wallet records in new user accounts.
+- **Solution**:
+  `doGet` in `backend/Code.gs` automatically creates and appends an empty wallet record with 0 available and pending balances if one does not exist for the queried user ID.
+
+### Error 6: CSP Report-Only Notices & Third-Party Telemetry (Paystack, PostHog, Google Tag Manager)
+- **Symptoms**:
+  ```
+  [Report Only] Refused to connect to '<URL>' because it violates the following Content Security Policy directive: "connect-src 'none'".
+  [Report Only] Refused to load the script 'https://checkout.paystack.com/...' because it violates the following Content Security Policy directive: "script-src 'unsafe-inline' 'unsafe-eval'".
+  ```
+- **Cause**:
+  1. **"[Report Only]" Warnings**: These are browser diagnostic notices issued when sandbox containers, browser extensions, or local proxy servers inject a `Content-Security-Policy-Report-Only` header. Because it is **Report Only**, the browser does not block actual requests; it merely logs telemetry warnings.
+  2. **Third-Party Paystack Subresources**: Paystack's inline checkout (`https://js.paystack.co/v1/inline.js`) internally opens a secure checkout iframe that initiates heartbeat and integrity checks to `checkout.paystack.com`, `s3-eu-west-1.amazonaws.com`, and related domains.
+  3. **Analytics / Telemetry**: Third-party monitoring scripts (such as PostHog or Google Tag Manager) attempt to send diagnostics to their endpoints (`eu.i.posthog.com`, `www.googletagmanager.com`).
+- **How to configure your environment to avoid encountering these errors**:
+  1. **Do not restrict `connect-src` or `script-src` to `'none'`**: Ensure your web server (Nginx, Apache, or hosting provider such as Vercel, Netlify, or Cloudflare) does not emit `connect-src 'none'` or restrictive report-only policies.
+  2. **Production CSP Header**: When deploying behind a custom Content Security Policy, use the following policy headers to allow all eBron, Google Apps Script, and Paystack functionality:
+     ```http
+     Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.paystack.co https://checkout.paystack.com https://s3-eu-west-1.amazonaws.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://checkout.paystack.com https://api.paystack.co; frame-src 'self' https://checkout.paystack.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;
+     ```
+  3. **Ad-blockers / Privacy Extensions**: If developing locally, ensure strict tracking protection or browser extensions (like Brave Shields, uBlock Origin) are not injecting synthetic `connect-src 'none'` report headers into the local tab.
+
+### Error 7: React Router Deprecation Warnings
+- **Symptoms**:
+  `React Router Future Flag Warning: React Router will begin wrapping state updates in React.startTransition in v7...`
+- **Solution**:
+  The application has opted into the v7 future transition flags in `App.tsx`:
+  `<BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>`
+  This suppresses the deprecation warnings and prepares the codebase for seamless migration to React Router v7.
+
+### Error 8: The current top-up is not recorded in `WalletTransactions` / `SalesTransactions`
+- **Symptoms**:
+  The wallet balance updates but no matching row appears in `WalletTransactions` (or, for sales, `SalesTransactions`), and the browser console shows:
+  ```
+  GET https://script.google.com/macros/s/.../exec?action=getUnreadCounts&userId=u_admin_001 net::ERR_NAME_NOT_RESOLVED
+  GET https://script.google.com/macros/s/.../exec?action=getNotifications&userId=u_admin_001 net::ERR_FAILED 200 (OK)
+  ... has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present ...
+  ```
+- **Causes & Solutions**:
+  1. **Missing ledger sheet in an older spreadsheet**: If the spreadsheet was created before a ledger sheet existed, `appendSheetRow` could throw after the wallet was already credited. This is now prevented: the backend `ensureSheet()` helper creates the sheet with its headers on demand, so `WalletTransactions`, `SalesTransactions`, and every other sheet are always present before a row is written.
+  2. **Stale GAS deployment**: The `net::ERR_NAME_NOT_RESOLVED` / `net::ERR_FAILED 200 (OK)` errors indicate the deployed Web App URL is unreachable or the deployment is out of date. Confirm `VITE_API_URL` in `frontend/.env` matches an **active** deployment, then **Deploy > Manage deployments > Edit > New version > Deploy** so the latest `Code.gs` (which contains the `topUpWallet` action) is live.
+  3. **Re-run `setupDatabase()`**: After pulling the consolidated schema, run `setupDatabase()` once in the Apps Script editor. It recreates any missing sheets and removes the retired `Conversations`, `NotificationSubscriptions`, and `Transactions` sheets.
+
+---
+
+## I. Testing & Verification
+
+1. **Backend Unit Tests**:
+   ```bash
+   npm run test:backend
+   ```
+2. **Frontend End-to-End Tests**:
+   ```bash
+   cd frontend
+   npx playwright test
+   ```
