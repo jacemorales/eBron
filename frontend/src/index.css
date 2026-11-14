@@ -1,3 +1,42 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Text inputs and textareas display text cursor when hovered or focused */
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="search"],
+  input:not([type]),
+  textarea {
+    cursor: text;
+  }
+
+  /* Select dropdowns display pointer cursor */
+  select {
+    cursor: pointer;
+  }
+
+  /* Buttons display pointer cursor */
+  button,
+  [type="button"],
+  [type="submit"],
+  [type="reset"] {
+    cursor: pointer;
+  }
+
+  /* Disabled inputs, selects, textareas, and buttons display not-allowed */
+  button:disabled,
+  [type="button"]:disabled,
+  [type="submit"]:disabled,
+  [type="reset"]:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+}

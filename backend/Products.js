@@ -20,13 +20,82 @@ export function validateProductData(data) {
   if (isNaN(price) || price <= 0) errors.push('Price must be a positive number.');
   if (!data.condition || !PRODUCT_CONDITIONS.includes(data.condition)) errors.push(`Condition must be valid`);
   if (!data.images || !Array.isArray(data.images) || data.images.length === 0) errors.push('At least one product image is required.');
+  if (data.stockQuantity !== undefined && data.stockQuantity !== null && data.stockQuantity !== '') {
+    const sq = Number(data.stockQuantity);
+    if (isNaN(sq) || sq < 1) errors.push('Stock quantity must be at least 1 unit.');
+  }
   return { valid: errors.length === 0, errors };
 }
 
+export function initializeProductStock(productOrQuantity, explicitQuantity) {
+  let baseProduct = {};
+  let stockQuantity = productOrQuantity;
+  if (productOrQuantity && typeof productOrQuantity === 'object') {
+    baseProduct = productOrQuantity;
+    stockQuantity = explicitQuantity !== undefined ? explicitQuantity : productOrQuantity.stockQuantity;
+  }
+  let qty = 1;
+  if (stockQuantity !== undefined && stockQuantity !== null && String(stockQuantity).trim() !== '') {
+    qty = Math.max(1, parseInt(stockQuantity, 10) || 1);
+  }
+  return {
+    ...baseProduct,
+    initialStock: qty,
+    availableStock: qty,
+    soldQuantity: 0,
+    stockStatus: 'in_stock'
+  };
+}
+
+export function decrementProductStock(product, quantity = 1) {
+  const qty = Math.max(1, Number(quantity) || 1);
+  const currentAvail = product.availableStock !== undefined ? Number(product.availableStock) : (product.availability === 'sold' ? 0 : 1);
+  if (currentAvail < qty) {
+    throw new Error(`Insufficient stock for "${product.name}". Requested: ${qty}, available: ${currentAvail}.`);
+  }
+
+  const newAvail = currentAvail - qty;
+  const newSold = (Number(product.soldQuantity) || 0) + qty;
+  const isSoldOut = newAvail === 0;
+
+  return {
+    ...product,
+    availableStock: newAvail,
+    soldQuantity: newSold,
+    stockStatus: isSoldOut ? 'sold_out' : 'in_stock',
+    availability: isSoldOut ? 'sold' : 'available',
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function restoreProductStock(product, quantity = 1) {
+  const qty = Math.max(1, Number(quantity) || 1);
+  const currentAvail = Number(product.availableStock) || 0;
+  const currentSold = Number(product.soldQuantity) || 0;
+
+  const newAvail = currentAvail + qty;
+  const newSold = Math.max(0, currentSold - qty);
+
+  return {
+    ...product,
+    availableStock: newAvail,
+    soldQuantity: newSold,
+    stockStatus: 'in_stock',
+    availability: 'available',
+    updatedAt: new Date().toISOString()
+  };
+}
+
 export function filterProducts(products, filters = {}) {
-  const { category, search, minPrice, maxPrice, condition, availability, sellerId, includeDeleted = false } = filters;
+  const { category, search, minPrice, maxPrice, condition, availability, sellerId, includeDeleted = false, includeSold = true, forPublic = false } = filters;
   return products.filter(product => {
     if (!includeDeleted && product.status === 'deleted') return false;
+    // Hide sold or sold-out products from public marketplace browsing unless explicitly requested or seller is querying own items
+    if ((forPublic || !includeSold) && !sellerId) {
+      if (product.availability === 'sold' || product.stockStatus === 'sold_out') return false;
+      if (product.availableStock !== undefined && Number(product.availableStock) <= 0) return false;
+    }
+    if (forPublic && product.availability !== 'available') return false;
     if (category && category !== 'All' && product.category !== category) return false;
     if (condition && condition !== 'All' && product.condition !== condition) return false;
     if (availability && product.availability !== availability) return false;

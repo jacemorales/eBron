@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { MapPin, Edit2, CheckCircle, ArrowRight, Wallet, AlertCircle, PlusCircle, ShieldCheck } from 'lucide-react';
 import type { Product, Gender, Hall, BuyerWallet } from '../types';
 import { api } from '../services/api';
@@ -11,6 +11,7 @@ const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah', 'Dorcas'];
 
 export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { productId } = useParams<{ productId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, updateProfile } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
@@ -20,6 +21,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
   const [gender, setGender] = useState<Gender>('Male');
   const [hall, setHall] = useState<Hall>('Peter');
   const [room, setRoom] = useState('');
+  const [quantity, setQuantity] = useState(parseInt(searchParams.get('qty') || '1') || 1);
   const [submitting, setSubmitting] = useState(false);
   const [topUpModalOpen, setTopUpModalOpen] = useState(false);
 
@@ -36,7 +38,16 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
     setGender(user.gender);
     setHall(user.hallOfResidence);
     setRoom(user.roomNumber);
-    if (productId) api.getProductById(productId).then(setProduct);
+    if (productId) {
+      api.getProductById(productId).then(p => {
+        setProduct(p);
+        if (p) {
+          const avail = p.availableStock !== undefined ? p.availableStock : 1;
+          const initialQ = parseInt(searchParams.get('qty') || '1') || 1;
+          setQuantity(Math.min(avail > 0 ? avail : 1, Math.max(1, initialQ)));
+        }
+      });
+    }
     fetchWallet();
   }, [user, productId]);
 
@@ -56,12 +67,23 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
   };
 
   const availableBalance = Number(wallet?.availableBalance || 0);
-  const price = Number(product?.price || 0);
-  const deficit = Math.max(0, price - availableBalance);
-  const hasSufficientBalance = availableBalance >= price;
+  const unitPrice = Number(product?.price || 0);
+  const availableStock = product?.availableStock !== undefined ? product.availableStock : (product?.stockStatus === 'sold_out' ? 0 : 1);
+  const isSoldOut = availableStock <= 0 || product?.stockStatus === 'sold_out' || product?.availability !== 'available';
+  const totalPrice = unitPrice * quantity;
+  const deficit = Math.max(0, totalPrice - availableBalance);
+  const hasSufficientBalance = availableBalance >= totalPrice && !isSoldOut;
 
   const handlePay = async () => {
     if (!user || !product) return;
+    if (isSoldOut) {
+      onToast('error', 'This product is sold out.');
+      return;
+    }
+    if (quantity > availableStock) {
+      onToast('error', `Cannot purchase ${quantity} units. Only ${availableStock} unit(s) available.`);
+      return;
+    }
     if (!hasSufficientBalance) {
       onToast('error', `Insufficient wallet balance. Please top up ₦${deficit.toLocaleString()} to complete purchase.`);
       return;
@@ -73,13 +95,13 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
       gender,
       hallOfResidence: hall,
       roomNumber: room
-    });
+    }, quantity);
 
     if (res.success) {
       // Deduct balance locally to reflect immediate state
       setWallet(prev => prev ? {
         ...prev,
-        availableBalance: Math.max(0, (Number(prev.availableBalance) || 0) - price)
+        availableBalance: Math.max(0, (Number(prev.availableBalance) || 0) - totalPrice)
       } : null);
       onToast('success', 'Payment successful! Funds held securely in escrow pending confirmation.');
       navigate('/buy/pending');
@@ -161,7 +183,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             <div className="text-xs">
               <div className="font-bold text-slate-900">{product.name}</div>
               <div className="text-slate-500">{product.sellerName}</div>
-              <div className="font-black text-cu-blue text-sm mt-1">₦{Number(product.price).toLocaleString()}</div>
+              <div className="font-black text-cu-blue text-sm mt-1">₦{unitPrice.toLocaleString()} / unit</div>
             </div>
           </div>
 
@@ -177,11 +199,35 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             </div>
 
             <div className="flex items-center justify-between border-t pt-2 text-[11px] text-slate-500">
-              <span>Product Price:</span>
-              <span className="font-bold text-slate-800">₦{price.toLocaleString()}</span>
+              <span>Unit Price:</span>
+              <span className="font-bold text-slate-800">₦{unitPrice.toLocaleString()}</span>
             </div>
 
-            {!hasSufficientBalance ? (
+            {availableStock > 1 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-bold text-slate-700">Quantity:</span>
+                <select
+                  value={quantity}
+                  onChange={e => setQuantity(Number(e.target.value))}
+                  className="px-2 py-1 border border-slate-200 rounded-lg text-xs font-bold bg-white focus:outline-none focus:ring-1 focus:ring-cu-blue"
+                >
+                  {Array.from({ length: Math.min(availableStock, 10) }, (_, i) => i + 1).map(q => (
+                    <option key={q} value={q}>{q} {q === 1 ? 'unit' : 'units'}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between border-t pt-2 text-xs font-bold text-slate-900">
+              <span>Total Price ({quantity} {quantity === 1 ? 'unit' : 'units'}):</span>
+              <span className="font-black text-cu-blue text-sm">₦{totalPrice.toLocaleString()}</span>
+            </div>
+
+            {isSoldOut ? (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-bold text-center">
+                This item is currently sold out.
+              </div>
+            ) : !hasSufficientBalance ? (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 space-y-2">
                 <div className="flex items-start gap-1.5 font-bold">
                   <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
@@ -210,12 +256,14 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
 
           <button
             type="button"
-            disabled={submitting || !hasSufficientBalance}
+            disabled={submitting || !hasSufficientBalance || isSoldOut}
             onClick={handlePay}
             className="w-full py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-40 disabled:cursor-not-allowed text-cu-blue font-extrabold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
           >
-            {hasSufficientBalance ? (
-              <>Deduct from Wallet & Pay ₦{price.toLocaleString()} <ArrowRight className="w-4 h-4" /></>
+            {isSoldOut ? (
+              'Sold Out'
+            ) : hasSufficientBalance ? (
+              <>Deduct from Wallet & Pay ₦{totalPrice.toLocaleString()} <ArrowRight className="w-4 h-4" /></>
             ) : (
               <>Top Up Wallet to Pay (₦{deficit.toLocaleString()} required)</>
             )}

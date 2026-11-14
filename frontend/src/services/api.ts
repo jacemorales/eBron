@@ -15,7 +15,11 @@ import type {
   ReportStatus,
   NotificationItem,
   Gender,
-  Hall
+  Hall,
+  Bank,
+  AccountAppeal,
+  FinancialTransaction,
+  BulkWithdrawalSummary
 } from '../types';
 
 /**
@@ -116,7 +120,7 @@ export const api = {
     }
   },
 
-  async login(schoolEmail: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
+  async login(schoolEmail: string, password: string): Promise<{ success: boolean; user?: User; isDeactivated?: boolean; error?: string }> {
     try {
       const res = await gasPost('login', { schoolEmail, password });
       if (res && res.success && res.user) {
@@ -224,6 +228,7 @@ export const api = {
     price: number;
     condition: any;
     stockNumber?: string;
+    initialStock?: number;
     images: string[];
     primaryIndex?: number;
   }): Promise<{ success: boolean; product?: Product; error?: string }> {
@@ -419,14 +424,43 @@ export const api = {
     gender: Gender;
     hallOfResidence: Hall;
     roomNumber: string;
-  }): Promise<{ success: boolean; order?: Order; error?: string }> {
+  }, quantity: number = 1): Promise<{ success: boolean; order?: Order; error?: string }> {
     try {
       const res = await gasPost('createOrder', {
         buyerId: buyer.userId,
         buyerName: buyer.fullName,
         productId,
+        quantity,
         deliveryInfo
       });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async requestOrderCancellation(orderId: string, requestedBy: 'buyer' | 'seller', reason: string, explanation?: string): Promise<{ success: boolean; order?: Order; error?: string }> {
+    try {
+      const res = await gasPost('requestOrderCancellation', { orderId, requestedBy, reason, explanation });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async getRefundRequests(): Promise<Order[]> {
+    try {
+      const res = await gasGet('getRefundRequests');
+      return res.orders || [];
+    } catch (err) {
+      console.error('getRefundRequests error:', err);
+      return [];
+    }
+  },
+
+  async processRefund(orderId: string, decision: 'approved' | 'rejected', adminNotes?: string): Promise<{ success: boolean; order?: Order; error?: string }> {
+    try {
+      const res = await gasPost('processRefund', { orderId, decision, adminNotes });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -541,9 +575,29 @@ export const api = {
     }
   },
 
+  async getBanks(): Promise<Bank[]> {
+    try {
+      const res = await gasGet('getBanks');
+      return res.banks || [];
+    } catch (err) {
+      console.error('getBanks error:', err);
+      return [];
+    }
+  },
+
+  async resolveAccount(accountNumber: string, bankCode: string): Promise<{ success: boolean; accountName?: string; error?: string }> {
+    try {
+      const res = await gasGet('resolveAccount', { accountNumber, bankCode });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async requestWithdrawal(userId: string, data: {
     amount: number;
     bankName: string;
+    bankCode: string;
     accountNumber: string;
     accountName: string;
   }): Promise<{ success: boolean; request?: WithdrawalRequest; error?: string }> {
@@ -603,6 +657,53 @@ export const api = {
     }
   },
 
+  async deactivateUser(userId: string, status: 'deactivated' | 'active' = 'deactivated'): Promise<{ success: boolean; user?: User; error?: string }> {
+    try {
+      const res = await gasPost('deactivateUser', { userId, status });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async submitAccountAppeal(userId: string, schoolEmail: string, explanation: string): Promise<{ success: boolean; appeal?: AccountAppeal; error?: string }> {
+    try {
+      const res = await gasPost('submitAccountAppeal', { userId, schoolEmail, explanation });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async getAppeals(status?: 'pending' | 'approved' | 'rejected'): Promise<AccountAppeal[]> {
+    try {
+      const res = await gasGet('getAppeals', status ? { status } : {});
+      return res.appeals || [];
+    } catch (err) {
+      console.error('getAppeals error:', err);
+      return [];
+    }
+  },
+
+  async getUserAppeal(userId: string): Promise<AccountAppeal | null> {
+    try {
+      const res = await gasGet('getUserAppeal', { userId });
+      return res.appeal || null;
+    } catch (err) {
+      console.error('getUserAppeal error:', err);
+      return null;
+    }
+  },
+
+  async processAccountAppeal(appealId: string, decision: 'approved' | 'rejected', adminId: string, adminNotes?: string): Promise<{ success: boolean; appeal?: AccountAppeal; error?: string }> {
+    try {
+      const res = await gasPost('processAccountAppeal', { appealId, decision, adminId, adminNotes });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async getAllWithdrawals(): Promise<WithdrawalRequest[]> {
     try {
       const res = await gasGet('getAllWithdrawals');
@@ -633,9 +734,57 @@ export const api = {
     }
   },
 
-  async processWithdrawal(requestId: string, decision: 'processed' | 'rejected', adminNotes: string = ''): Promise<{ success: boolean; error?: string }> {
+  async processWithdrawal(requestId: string, decision: 'processed' | 'approved' | 'rejected', adminNotes: string = ''): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await gasPost('processWithdrawal', { requestId, decision, adminNotes });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async bulkProcessWithdrawals(requestIds?: string[]): Promise<{
+    success: boolean;
+    summary?: BulkWithdrawalSummary;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await gasPost('bulkProcessWithdrawals', { requestIds });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async getTransactionsLedger(): Promise<FinancialTransaction[]> {
+    try {
+      const res = await gasGet('getTransactionsLedger');
+      return res.transactions || [];
+    } catch (err) {
+      console.error('getTransactionsLedger error:', err);
+      return [];
+    }
+  },
+
+  async getReconciliations(): Promise<FinancialTransaction[]> {
+    try {
+      const res = await gasGet('getReconciliations');
+      return res.reconciliations || [];
+    } catch (err) {
+      console.error('getReconciliations error:', err);
+      return [];
+    }
+  },
+
+  async reconcileTransaction(reference: string, adminNotes?: string): Promise<{
+    success: boolean;
+    message?: string;
+    reconciled?: boolean;
+    error?: string;
+  }> {
+    try {
+      const res = await gasPost('reconcileTransaction', { reference, adminNotes });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };

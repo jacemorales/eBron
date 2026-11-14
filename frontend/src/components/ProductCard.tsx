@@ -94,13 +94,28 @@ export const ProductCard: React.FC<{
             <ActionMenu items={menuItems} ariaLabel={`Actions for ${product.name}`} />
           </div>
 
-          {product.availability !== 'available' && (
-            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center">
-              <span className="bg-red-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full shadow">
-                {product.availability}
-              </span>
-            </div>
-          )}
+          {(() => {
+            const avail = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
+            const isSold = avail <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+
+            if (isSold) {
+              return (
+                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center">
+                  <span className="bg-rose-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full shadow">
+                    Sold Out
+                  </span>
+                </div>
+              );
+            }
+            if (avail > 1) {
+              return (
+                <span className="absolute bottom-2 left-2 bg-emerald-600/90 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-sm">
+                  {avail} in stock
+                </span>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         <div className="p-4 space-y-1.5">

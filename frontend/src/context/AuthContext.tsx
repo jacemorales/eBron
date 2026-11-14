@@ -5,7 +5,7 @@ import { api } from '../services/api';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, pass: string) => Promise<{ success: boolean; error?: string; isDeactivated?: boolean; user?: User }>;
   register: (data: {
     fullName: string;
     regNumber: string;
@@ -52,6 +52,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(res.user);
       sessionStorage.setItem(SESSION_TOKEN_KEY, JSON.stringify(res.user));
       return { success: true };
+    }
+    if (res.isDeactivated) {
+      return { success: false, isDeactivated: true, user: res.user, error: res.error };
     }
     return { success: false, error: res.error || 'Invalid credentials or user not found.' };
   };

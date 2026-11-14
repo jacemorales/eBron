@@ -6,7 +6,7 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode; requireAdmin?
   children,
   requireAdmin = false
 }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -16,6 +16,11 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode; requireAdmin?
   if (!user) {
     // Redirect unauthenticated visitor to login, preserving intended destination
     return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+  }
+
+  if (user.status === 'deactivated' || user.status === 'suspended') {
+    logout();
+    return <Navigate to="/login?deactivated=true" replace />;
   }
 
   if (requireAdmin && user.role !== 'admin') {

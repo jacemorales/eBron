@@ -16,7 +16,7 @@ var SHEETS_SCHEMA = {
     'passwordHash',
     'salt',
     'role', // 'student' | 'admin'
-    'status', // 'active' | 'suspended'
+    'status', // 'active' | 'suspended' | 'deactivated'
     'createdAt',
     'updatedAt'
   ],
@@ -29,6 +29,10 @@ var SHEETS_SCHEMA = {
     'price',
     'condition', // 'New' | 'Fairly Used' | 'Used'
     'stockNumber', // Optional stock reference
+    'initialStock',
+    'availableStock',
+    'soldQuantity',
+    'stockStatus', // 'in_stock' | 'sold_out'
     'primaryImageUrl',
     'availability', // 'available' | 'sold' | 'reserved'
     'status', // 'active' | 'deleted' (soft delete)
@@ -71,11 +75,16 @@ var SHEETS_SCHEMA = {
     'orderId',
     'orderReference',
     'productId',
+    'productName',
+    'productImage',
     'buyerId',
+    'buyerName',
     'sellerId',
+    'sellerName',
     'amount',
-    'status', // 'awaiting_payment' | 'payment_successful' | 'awaiting_seller_confirmation' | 'awaiting_buyer_confirmation' | 'completed' | 'cancelled' | 'disputed'
-    'paymentMode', // 'TEST_MODE' | 'PAYPAL'
+    'quantity',
+    'status', // 'awaiting_payment' | 'payment_successful' | 'awaiting_seller_confirmation' | 'awaiting_buyer_confirmation' | 'refund_pending_approval' | 'refunded' | 'completed' | 'cancelled' | 'disputed'
+    'paymentMode', // 'WALLET_ESCROW' | 'PAYPAL'
     'paymentRef',
     'deliveryFullName',
     'deliveryGender',
@@ -84,6 +93,14 @@ var SHEETS_SCHEMA = {
     'sellerConfirmedAt',
     'buyerConfirmedAt',
     'completedAt',
+    'cancellationRequestedBy', // 'buyer' | 'seller'
+    'cancellationReason',
+    'cancellationExplanation',
+    'cancellationRequestedAt',
+    'refundStatus', // 'none' | 'pending_approval' | 'approved' | 'rejected'
+    'refundAdminNotes',
+    'refundProcessedAt',
+    'disputeReason',
     'createdAt',
     'updatedAt'
   ],
@@ -98,7 +115,7 @@ var SHEETS_SCHEMA = {
   WalletTransactions: [
     'transactionId',
     'userId',
-    'type', // 'topup' | 'purchase_deduction'
+    'type', // 'topup' | 'purchase_deduction' | 'refund'
     'amount',
     'reference',
     'status', // 'successful' | 'pending' | 'failed'
@@ -122,20 +139,60 @@ var SHEETS_SCHEMA = {
     'orderId',
     'orderReference',
     'amount',
-    'type', // 'pending_sale' | 'released_sale' | 'withdrawal'
-    'status', // 'pending' | 'completed' | 'disputed'
+    'type', // 'pending_sale' | 'released_sale' | 'withdrawal' | 'cancelled_sale'
+    'status', // 'pending' | 'completed' | 'disputed' | 'refunded'
     'createdAt'
+  ],
+  // Central financial transactions ledger with active tracking and reconciliation
+  Transactions: [
+    'transactionId',
+    'reference',
+    'userId',
+    'buyerId',
+    'sellerId',
+    'productId',
+    'orderId',
+    'type', // 'topup' | 'purchase_deduction' | 'pending_sale' | 'released_sale' | 'refund' | 'withdrawal_request' | 'withdrawal_transfer' | 'withdrawal_failed' | 'reversal'
+    'amount',
+    'paymentMethod', // 'paystack' | 'wallet' | 'sales_balance' | 'bank_transfer'
+    'paymentProvider', // 'paystack' | 'ebron'
+    'eBronStatus', // 'pending' | 'completed' | 'failed' | 'requires_reconciliation' | 'refunded' | 'reversed'
+    'paystackStatus', // 'success' | 'failed' | 'pending' | 'abandoned' | 'reversed' | 'none'
+    'statusHistory', // JSON array of { status, eBronStatus, paystackStatus, timestamp, details }
+    'createdAt',
+    'updatedAt',
+    'verificationDetails', // JSON payload
+    'errorMessage'
   ],
   WithdrawalRequests: [
     'requestId',
     'userId',
+    'userName',
+    'userEmail',
     'amount',
     'bankName',
+    'bankCode',
     'accountNumber',
     'accountName',
-    'status', // 'pending' | 'approved' | 'rejected' | 'processed'
+    'status', // 'pending' | 'processing' | 'successful' | 'failed' | 'rejected' | 'processed'
+    'reference',
+    'paystackRecipientCode',
+    'paystackTransferCode',
+    'paystackStatus',
     'adminNotes',
     'processedAt',
+    'createdAt'
+  ],
+  Appeals: [
+    'appealId',
+    'userId',
+    'userName',
+    'schoolEmail',
+    'explanation',
+    'status', // 'pending' | 'approved' | 'rejected'
+    'adminNotes',
+    'reviewedBy',
+    'reviewedAt',
     'createdAt'
   ],
   // Unified Notifications sheet: notification rows (notificationId set) +
@@ -199,8 +256,8 @@ function setupDatabase(spreadsheet) {
   });
 
   // Remove sheets retired after the table merges (Conversations -> Messages,
-  // NotificationSubscriptions -> Notifications, standalone Transactions ledger).
-  var obsoleteSheets = ['Conversations', 'NotificationSubscriptions', 'Transactions'];
+  // NotificationSubscriptions -> Notifications).
+  var obsoleteSheets = ['Conversations', 'NotificationSubscriptions'];
   var removed = [];
   obsoleteSheets.forEach(function(sheetName) {
     var dead = ss.getSheetByName(sheetName);

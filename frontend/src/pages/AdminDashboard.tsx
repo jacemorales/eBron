@@ -27,11 +27,28 @@ import {
   Store,
   CreditCard,
   ArrowDownLeft,
-  ArrowUpRight
+  ArrowUpRight,
+  Loader2,
+  RefreshCw,
+  CheckCheck,
+  History
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import type { Product, User, WithdrawalRequest, ProductReport, ReportStatus, WalletTransaction, SalesTransaction } from '../types';
+import type {
+  Product,
+  User,
+  WithdrawalRequest,
+  ProductReport,
+  ReportStatus,
+  WalletTransaction,
+  SalesTransaction,
+  Order,
+  AccountAppeal,
+  FinancialTransaction,
+  BulkWithdrawalSummary,
+  StatusHistoryItem
+} from '../types';
 
 export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { user } = useAuth();
@@ -46,23 +63,53 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [reports, setReports] = useState<ProductReport[]>([]);
-  const [txView, setTxView] = useState<'wallet' | 'sales'>('wallet');
+  const [refundRequests, setRefundRequests] = useState<Order[]>([]);
+  const [appeals, setAppeals] = useState<AccountAppeal[]>([]);
+
+  // Ledger & Reconciliation
+  const [transactionsLedger, setTransactionsLedger] = useState<FinancialTransaction[]>([]);
+  const [reconciliations, setReconciliations] = useState<FinancialTransaction[]>([]);
+  const [selectedLedgerTx, setSelectedLedgerTx] = useState<FinancialTransaction | null>(null);
+  const [reconcilingRef, setReconcilingRef] = useState<string | null>(null);
+
+  // Bulk Withdrawal State
+  const [bulkWithdrawalModalOpen, setBulkWithdrawalModalOpen] = useState(false);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkSummary, setBulkSummary] = useState<BulkWithdrawalSummary | null>(null);
+  const [processingWithdrawalId, setProcessingWithdrawalId] = useState<string | null>(null);
+
+  const [txView, setTxView] = useState<'wallet' | 'sales' | 'refunds' | 'ledger' | 'reconciliation'>('wallet');
   const [reportFilterCat, setReportFilterCat] = useState('All');
   const [reportFilterStatus, setReportFilterStatus] = useState('All');
   const [reportSearch, setReportSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Appeal Modal State
+  const [selectedAppeal, setSelectedAppeal] = useState<AccountAppeal | null>(null);
+  const [appealNotes, setAppealNotes] = useState('');
+  const [appealActionLoading, setAppealActionLoading] = useState(false);
+
+  // Refund Modal State
+  const [selectedRefundOrder, setSelectedRefundOrder] = useState<Order | null>(null);
+  const [refundActionType, setRefundActionType] = useState<'approved' | 'rejected' | null>(null);
+  const [refundNotes, setRefundNotes] = useState('');
+  const [refundActionLoading, setRefundActionLoading] = useState(false);
+
   const refreshData = async () => {
     setLoading(true);
     try {
-      const [stats, allProds, users, wds, allReps, wTxs, sTxs] = await Promise.all([
+      const [stats, allProds, users, wds, allReps, wTxs, sTxs, rRequests, allAppeals, ledger, recons] = await Promise.all([
         api.getAdminAnalytics(timeframe),
         api.getProducts({ includeDeleted: true }),
         api.getAllUsers(),
         api.getAllWithdrawals(),
         api.getReports({ timeframe }),
         api.getAllWalletTransactions(),
-        api.getAllSalesTransactions()
+        api.getAllSalesTransactions(),
+        api.getRefundRequests(),
+        api.getAppeals(),
+        api.getTransactionsLedger().catch(() => []),
+        api.getReconciliations().catch(() => [])
       ]);
       setAnalytics(stats);
       setProducts(allProds.filter(p => p.status !== 'deleted'));
@@ -72,6 +119,10 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
       setReports(allReps);
       setWalletTransactions(wTxs);
       setSalesTransactions(sTxs);
+      setRefundRequests(rRequests);
+      setAppeals(allAppeals);
+      setTransactionsLedger(ledger);
+      setReconciliations(recons);
     } catch (e) {
       console.error(e);
       onToast('error', 'Failed to load platform records.');
@@ -132,12 +183,134 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
     }
   };
 
-  const handleProcessWithdrawal = async (requestId: string, decision: 'processed' | 'rejected') => {
-    const notes = prompt(`Enter administrator verification notes for this ${decision} payout:`);
-    const res = await api.processWithdrawal(requestId, decision, notes || '');
+  const handleDeactivateUser = async (userId: string, targetStatus: 'deactivated' | 'active') => {
+    const actionLabel = targetStatus === 'deactivated' ? 'deactivate' : 'reactivate';
+    if (!confirm(`Are you sure you want to ${actionLabel} this student account?`)) return;
+    const res = await api.deactivateUser(userId, targetStatus);
     if (res.success) {
-      onToast('success', `Withdrawal marked as ${decision}!`);
+      onToast('success', `Student account has been ${targetStatus === 'deactivated' ? 'deactivated' : 'reactivated'}.`);
       refreshData();
+    } else {
+      onToast('error', res.error || `Failed to ${actionLabel} account.`);
+    }
+  };
+
+  const handleOpenAppeal = (appeal: AccountAppeal) => {
+    setSelectedAppeal(appeal);
+    setAppealNotes('');
+  };
+
+  const handleProcessAppeal = async (decision: 'approved' | 'rejected') => {
+    if (!selectedAppeal || !user) return;
+    setAppealActionLoading(true);
+    try {
+      const res = await api.processAccountAppeal(selectedAppeal.appealId, decision, user.userId, appealNotes.trim());
+      if (res.success) {
+        onToast('success', `Appeal ${decision} successfully.`);
+        setSelectedAppeal(null);
+        setAppealNotes('');
+        refreshData();
+      } else {
+        onToast('error', res.error || `Failed to process appeal.`);
+      }
+    } catch (e: any) {
+      onToast('error', e.message || 'Error processing appeal.');
+    } finally {
+      setAppealActionLoading(false);
+    }
+  };
+
+  const handleOpenRefundModal = (order: Order, type: 'approved' | 'rejected') => {
+    setSelectedRefundOrder(order);
+    setRefundActionType(type);
+    setRefundNotes('');
+  };
+
+  const handleProcessRefundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRefundOrder || !refundActionType) return;
+    if (refundActionType === 'rejected' && !refundNotes.trim()) {
+      onToast('error', 'Please provide an explanation for rejecting this refund.');
+      return;
+    }
+    setRefundActionLoading(true);
+    try {
+      const res = await api.processRefund(selectedRefundOrder.orderId, refundActionType, refundNotes.trim());
+      if (res.success) {
+        onToast('success', `Refund request has been ${refundActionType}.`);
+        setSelectedRefundOrder(null);
+        setRefundActionType(null);
+        setRefundNotes('');
+        refreshData();
+      } else {
+        onToast('error', res.error || `Failed to process refund.`);
+      }
+    } catch (e: any) {
+      onToast('error', e.message || 'Error processing refund.');
+    } finally {
+      setRefundActionLoading(false);
+    }
+  };
+
+  const handleProcessWithdrawal = async (requestId: string, decision: 'approved' | 'rejected') => {
+    if (processingWithdrawalId || bulkProcessing) return;
+    const promptMsg = decision === 'approved' 
+      ? 'Enter optional administrator notes for executing this Paystack payout:'
+      : 'Enter reason/explanation for rejecting this withdrawal:';
+    const notes = prompt(promptMsg);
+    if (decision === 'rejected' && notes === null) return;
+    setProcessingWithdrawalId(requestId);
+    try {
+      const res = await api.processWithdrawal(requestId, decision, notes || '');
+      if (res.success) {
+        onToast('success', decision === 'approved' ? 'Paystack transfer initiated successfully!' : 'Withdrawal request rejected.');
+        await refreshData();
+      } else {
+        onToast('error', res.error || `Failed to process withdrawal.`);
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error processing withdrawal.');
+    } finally {
+      setProcessingWithdrawalId(null);
+    }
+  };
+
+  const handleBulkApproveWithdrawals = async () => {
+    if (bulkProcessing) return;
+    setBulkProcessing(true);
+    try {
+      const res = await api.bulkProcessWithdrawals();
+      if (res.success && res.summary) {
+        setBulkSummary(res.summary);
+        onToast('success', res.message || `Bulk payout completed: ${res.summary.successful} approved, ${res.summary.failed} failed.`);
+        await refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to execute bulk withdrawal payouts.');
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error during bulk payout execution.');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleReconcile = async (reference: string) => {
+    if (reconcilingRef) return;
+    const confirmReconcile = window.confirm(`Reconcile transaction ${reference}? This will verify the Paystack payment and credit the user's wallet without re-charging.`);
+    if (!confirmReconcile) return;
+    setReconcilingRef(reference);
+    try {
+      const res = await api.reconcileTransaction(reference);
+      if (res.success) {
+        onToast('success', res.message || `Transaction ${reference} reconciled successfully!`);
+        await refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to reconcile transaction.');
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error reconciling transaction.');
+    } finally {
+      setReconcilingRef(null);
     }
   };
 
@@ -855,127 +1028,298 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
-              {usersList.map(u => (
-                <tr key={u.userId}>
-                  <td className="p-3 font-bold text-slate-900">{u.fullName}</td>
-                  <td className="p-3 font-mono text-[11px]">{u.schoolEmail}</td>
-                  <td className="p-3">{u.hallOfResidence} Hall, Room {u.roomNumber}</td>
-                  <td className="p-3 font-bold text-cu-blue uppercase text-[10px]">{u.role}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${u.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
-                      {u.status}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    {u.role !== 'admin' && (
-                      <button
-                        type="button"
-                        onClick={() => handleToggleUser(u.userId)}
-                        className={`text-xs font-bold px-2 py-1 rounded flex items-center gap-1 ${
-                          u.status === 'active' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'
-                        }`}
-                      >
-                        {u.status === 'active' ? <><UserX className="w-3.5 h-3.5" /> Suspend</> : <><UserCheck className="w-3.5 h-3.5" /> Reactivate</>}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              {usersList.map(u => {
+                const userAppeal = appeals.find(a => a.userId === u.userId && a.status === 'pending');
+                const isDeactivated = u.status === 'deactivated' || u.status === 'suspended';
 
-      {/* TAB 5: WITHDRAWALS MANAGEMENT */}
-      {activeTab === 'withdrawals' && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
-              <tr>
-                <th className="p-3">Student</th>
-                <th className="p-3">Amount</th>
-                <th className="p-3">Bank Details</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Process</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 font-medium">
-              {withdrawals.length === 0 ? (
-                <tr><td colSpan={5} className="p-6 text-center text-slate-400">No withdrawal requests.</td></tr>
-              ) : (
-                withdrawals.map(w => (
-                  <tr key={w.requestId}>
-                    <td className="p-3">
-                      <div className="font-bold">{w.userName}</div>
-                      <div className="text-[10px] text-slate-400">{w.userEmail}</div>
-                    </td>
-                    <td className="p-3 font-bold text-slate-900">₦{Number(w.amount).toLocaleString()}</td>
-                    <td className="p-3">
-                      <div>{w.bankName} - {w.accountNumber}</div>
-                      <div className="text-[10px] text-slate-400">{w.accountName}</div>
-                    </td>
+                return (
+                  <tr key={u.userId}>
+                    <td className="p-3 font-bold text-slate-900">{u.fullName}</td>
+                    <td className="p-3 font-mono text-[11px]">{u.schoolEmail}</td>
+                    <td className="p-3">{u.hallOfResidence} Hall, Room {u.roomNumber}</td>
+                    <td className="p-3 font-bold text-cu-blue uppercase text-[10px]">{u.role}</td>
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                        w.status === 'processed' ? 'bg-emerald-100 text-emerald-800' :
-                        w.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
+                        u.status === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                        u.status === 'deactivated' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
                       }`}>
-                        {w.status}
+                        {u.status}
                       </span>
                     </td>
                     <td className="p-3">
-                      {w.status === 'pending' && (
-                        <div className="flex gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {userAppeal && (
                           <button
                             type="button"
-                            onClick={() => handleProcessWithdrawal(w.requestId, 'processed')}
-                            className="bg-emerald-600 text-white px-2 py-1 rounded text-[11px] font-bold flex items-center gap-1"
+                            onClick={() => handleOpenAppeal(userAppeal)}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[11px] font-bold flex items-center gap-1 shadow-sm transition-colors"
                           >
-                            <CheckCircle className="w-3 h-3" /> Approve & Mark Processed
+                            <AlertTriangle className="w-3 h-3" /> View Appeal
+                            <span className="ml-0.5 px-1.5 py-0.2 bg-white text-amber-800 rounded-full text-[9px] font-black">Pending</span>
                           </button>
+                        )}
+                        {u.role !== 'admin' && (
                           <button
                             type="button"
-                            onClick={() => handleProcessWithdrawal(w.requestId, 'rejected')}
-                            className="bg-red-50 text-red-700 px-2 py-1 rounded text-[11px] font-bold flex items-center gap-1"
+                            onClick={() => handleDeactivateUser(u.userId, isDeactivated ? 'active' : 'deactivated')}
+                            className={`text-xs font-bold px-2.5 py-1 rounded flex items-center gap-1 transition-colors ${
+                              !isDeactivated ? 'bg-rose-50 text-rose-700 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            }`}
                           >
-                            <XCircle className="w-3 h-3" /> Reject
+                            {!isDeactivated ? <><UserX className="w-3.5 h-3.5" /> Deactivate</> : <><UserCheck className="w-3.5 h-3.5" /> Reactivate</>}
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))
-              )}
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* TAB 6: WALLET & SALES TRANSACTIONS MONITOR */}
+      {/* TAB 5: WITHDRAWALS MANAGEMENT (Paystack Payouts) */}
+      {activeTab === 'withdrawals' && (
+        <div className="space-y-4">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <Store className="w-4 h-4 text-emerald-600" /> Seller Withdrawal Payouts
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Total Requests: <strong>{withdrawals.length}</strong> • Pending Approval: <strong className="text-amber-600">{withdrawals.filter(w => w.status === 'pending').length}</strong>
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBulkWithdrawalModalOpen(true)}
+                disabled={bulkProcessing || withdrawals.filter(w => w.status === 'pending').length === 0}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                {bulkProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing Payouts...
+                  </>
+                ) : (
+                  <>
+                    <CheckCheck className="w-4 h-4" /> Approve All Pending ({withdrawals.filter(w => w.status === 'pending').length})
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                <tr>
+                  <th className="p-3">Student</th>
+                  <th className="p-3">Amount</th>
+                  <th className="p-3">Bank Details</th>
+                  <th className="p-3">Reference</th>
+                  <th className="p-3">Transfer Status</th>
+                  <th className="p-3">Process</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {withdrawals.length === 0 ? (
+                  <tr><td colSpan={6} className="p-6 text-center text-slate-400">No withdrawal requests recorded.</td></tr>
+                ) : (
+                  withdrawals.map(w => (
+                    <tr key={w.requestId}>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">{w.userName}</div>
+                        <div className="text-[10px] text-slate-400">{w.userEmail}</div>
+                      </td>
+                      <td className="p-3 font-bold text-slate-900">₦{Number(w.amount).toLocaleString()}</td>
+                      <td className="p-3">
+                        <div className="font-semibold text-slate-800">{w.bankName} {w.bankCode ? <span className="font-mono text-slate-500 font-normal">({w.bankCode})</span> : ''}</div>
+                        <div className="font-mono text-slate-600">{w.accountNumber}</div>
+                        <div className="text-[10px] text-slate-500 font-bold">{w.accountName}</div>
+                      </td>
+                      <td className="p-3 font-mono text-[11px] text-slate-500">{w.reference || w.requestId}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          w.status === 'processed' || w.status === 'successful' ? 'bg-emerald-100 text-emerald-800' :
+                          w.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                          w.status === 'failed' ? 'bg-rose-100 text-rose-800' :
+                          w.status === 'processing' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {w.status}
+                        </span>
+                        {w.paystackTransferCode && (
+                          <div className="text-[9px] font-mono text-slate-400 mt-0.5">Code: {w.paystackTransferCode}</div>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        {(w.status === 'pending' || w.status === 'failed') && (
+                          <div className="flex gap-1.5">
+                            <button
+                              type="button"
+                              disabled={processingWithdrawalId === w.requestId || bulkProcessing}
+                              onClick={() => handleProcessWithdrawal(w.requestId, 'approved')}
+                              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-2.5 py-1.5 rounded text-[11px] font-bold flex items-center gap-1 shadow-sm transition-colors"
+                            >
+                              {processingWithdrawalId === w.requestId ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Processing...
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle className="w-3 h-3" /> Approve & Payout (Paystack)
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={processingWithdrawalId === w.requestId || bulkProcessing}
+                              onClick={() => handleProcessWithdrawal(w.requestId, 'rejected')}
+                              className="bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 px-2.5 py-1.5 rounded text-[11px] font-bold flex items-center gap-1 transition-colors"
+                            >
+                              <XCircle className="w-3 h-3" /> Reject
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: WALLET, SALES & REFUNDS TRANSACTIONS MONITOR */}
       {activeTab === 'transactions' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-              <CreditCard className="w-4 h-4 text-cu-blue" /> Financial Transactions Monitor
+              <CreditCard className="w-4 h-4 text-cu-blue" /> Financial & Refund Management
             </h2>
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl text-xs font-bold self-start sm:self-auto">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl text-xs font-bold self-start sm:self-auto overflow-x-auto">
               <button
                 type="button"
                 onClick={() => setTxView('wallet')}
                 className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 ${txView === 'wallet' ? 'bg-white text-cu-blue shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
               >
-                <ArrowDownLeft className="w-3.5 h-3.5" /> Wallet Transactions ({walletTransactions.length})
+                <ArrowDownLeft className="w-3.5 h-3.5" /> Wallet ({walletTransactions.length})
               </button>
               <button
                 type="button"
                 onClick={() => setTxView('sales')}
                 className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 ${txView === 'sales' ? 'bg-white text-cu-blue shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
               >
-                <ArrowUpRight className="w-3.5 h-3.5" /> Sales Transactions ({salesTransactions.length})
+                <ArrowUpRight className="w-3.5 h-3.5" /> Sales ({salesTransactions.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTxView('refunds')}
+                className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 ${txView === 'refunds' ? 'bg-white text-cu-blue shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-600" /> Refunds ({refundRequests.filter(r => r.status === 'refund_pending_approval').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTxView('ledger')}
+                className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 ${txView === 'ledger' ? 'bg-white text-cu-blue shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <History className="w-3.5 h-3.5 text-blue-600" /> Central Ledger ({transactionsLedger.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTxView('reconciliation')}
+                className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 ${txView === 'reconciliation' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-rose-600" /> Reconciliation ({reconciliations.length})
               </button>
             </div>
           </div>
 
-          {txView === 'wallet' ? (
+          {txView === 'refunds' ? (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                  <tr>
+                    <th className="p-3">Order Ref & Product</th>
+                    <th className="p-3">Requester</th>
+                    <th className="p-3">Buyer & Seller</th>
+                    <th className="p-3">Amount</th>
+                    <th className="p-3">Reason & Explanation</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {refundRequests.length === 0 ? (
+                    <tr><td colSpan={7} className="p-6 text-center text-slate-400">No refund requests recorded.</td></tr>
+                  ) : (
+                    refundRequests.map(order => {
+                      const isPending = order.status === 'refund_pending_approval';
+                      return (
+                        <tr key={order.orderId}>
+                          <td className="p-3">
+                            <div className="font-bold text-slate-900">{order.productName}</div>
+                            <div className="font-mono text-[10px] text-slate-400">Ref: {order.orderReference}</div>
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              order.cancellationRequestedBy === 'buyer' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                            }`}>
+                              {order.cancellationRequestedBy || 'N/A'}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <div>Buyer: <strong>{order.buyerName}</strong></div>
+                            <div className="text-slate-500">Seller: <strong>{order.sellerName}</strong></div>
+                          </td>
+                          <td className="p-3 font-bold text-slate-900">₦{Number(order.amount).toLocaleString()}</td>
+                          <td className="p-3 max-w-xs">
+                            <div className="font-bold text-slate-800">{order.cancellationReason || 'No reason specified'}</div>
+                            {order.cancellationExplanation && (
+                              <div className="text-[11px] text-slate-500 mt-0.5">{order.cancellationExplanation}</div>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              order.status === 'refund_pending_approval' ? 'bg-amber-100 text-amber-800' :
+                              order.status === 'refunded' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {order.status.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            {isPending ? (
+                              <div className="flex gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenRefundModal(order, 'approved')}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 shadow-sm transition-colors"
+                                >
+                                  <CheckCircle className="w-3 h-3" /> Approve Refund
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenRefundModal(order, 'rejected')}
+                                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-colors"
+                                >
+                                  <XCircle className="w-3 h-3" /> Reject
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">Processed</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : txView === 'wallet' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
@@ -1019,7 +1363,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                 </tbody>
               </table>
             </div>
-          ) : (
+          ) : txView === 'sales' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
@@ -1066,7 +1410,529 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                 </tbody>
               </table>
             </div>
+          ) : txView === 'ledger' ? (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                  <tr>
+                    <th className="p-3">Reference / TxID</th>
+                    <th className="p-3">Type</th>
+                    <th className="p-3">User</th>
+                    <th className="p-3">Amount</th>
+                    <th className="p-3">Method / Provider</th>
+                    <th className="p-3">eBron Status</th>
+                    <th className="p-3">Paystack Status</th>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">History</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {transactionsLedger.length === 0 ? (
+                    <tr><td colSpan={9} className="p-6 text-center text-slate-400">No transactions recorded in central ledger yet.</td></tr>
+                  ) : (
+                    transactionsLedger.map(tx => {
+                      let historyCount = 0;
+                      if (Array.isArray(tx.statusHistory)) {
+                        historyCount = tx.statusHistory.length;
+                      } else if (typeof tx.statusHistory === 'string') {
+                        try { historyCount = JSON.parse(tx.statusHistory).length; } catch (e) { historyCount = 1; }
+                      }
+                      return (
+                        <tr key={tx.transactionId || tx.reference}>
+                          <td className="p-3">
+                            <div className="font-mono font-bold text-slate-800">{tx.reference || '-'}</div>
+                            <div className="font-mono text-[10px] text-slate-400">{tx.transactionId}</div>
+                          </td>
+                          <td className="p-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                              {tx.type ? tx.type.replace('_', ' ') : 'transaction'}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <div className="font-bold text-slate-800">{userNameById(tx.userId)}</div>
+                            <div className="text-[10px] text-slate-400">{tx.userId}</div>
+                          </td>
+                          <td className="p-3 font-bold text-slate-900">₦{Number(tx.amount || 0).toLocaleString()}</td>
+                          <td className="p-3 capitalize text-slate-600">{tx.paymentMethod || 'wallet'} ({tx.paymentProvider || 'ebron'})</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              tx.eBronStatus === 'completed' || tx.eBronStatus === 'success' ? 'bg-emerald-100 text-emerald-800' :
+                              tx.eBronStatus === 'requires_reconciliation' ? 'bg-rose-100 text-rose-800 animate-pulse' :
+                              tx.eBronStatus === 'failed' || tx.eBronStatus === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {tx.eBronStatus || 'pending'}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              tx.paystackStatus === 'success' || tx.paystackStatus === 'successful' ? 'bg-emerald-100 text-emerald-800' :
+                              tx.paystackStatus === 'failed' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {tx.paystackStatus || 'none'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-500">{tx.createdAt ? new Date(tx.createdAt).toLocaleString() : '-'}</td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLedgerTx(tx)}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-bold flex items-center gap-1 transition-colors"
+                            >
+                              <History className="w-3 h-3 text-blue-600" /> History ({historyCount})
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">Automated Payment Tracking & Reconciliation</div>
+                  <p className="text-[11px] text-amber-700 mt-0.5">
+                    Transactions listed below are flagged where Paystack payment succeeded, but eBron processing encountered an issue.
+                    Clicking <strong>Reconcile Transaction</strong> verifies Paystack status server-side and safely credits the student's wallet without charging them again.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                    <tr>
+                      <th className="p-3">Reference</th>
+                      <th className="p-3">Student</th>
+                      <th className="p-3">Type</th>
+                      <th className="p-3">Amount</th>
+                      <th className="p-3">Paystack Status</th>
+                      <th className="p-3">eBron Status</th>
+                      <th className="p-3">Issue / Error</th>
+                      <th className="p-3">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {reconciliations.length === 0 ? (
+                      <tr><td colSpan={8} className="p-8 text-center text-slate-400">
+                        <CheckCircle className="w-6 h-6 text-emerald-500 mx-auto mb-1.5" />
+                        No transactions require reconciliation. All payments are healthy and reconciled!
+                      </td></tr>
+                    ) : (
+                      reconciliations.map(tx => (
+                        <tr key={tx.reference}>
+                          <td className="p-3 font-mono font-bold text-slate-800">{tx.reference}</td>
+                          <td className="p-3">
+                            <div className="font-bold text-slate-800">{userNameById(tx.userId)}</div>
+                            <div className="text-[10px] text-slate-400">{tx.userId}</div>
+                          </td>
+                          <td className="p-3 capitalize">{tx.type}</td>
+                          <td className="p-3 font-bold text-slate-900">₦{Number(tx.amount || 0).toLocaleString()}</td>
+                          <td className="p-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">
+                              {tx.paystackStatus}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-rose-100 text-rose-800">
+                              {tx.eBronStatus}
+                            </span>
+                          </td>
+                          <td className="p-3 text-[11px] text-rose-600 max-w-xs truncate">{tx.errorMessage || 'eBron fulfillment interrupted'}</td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              disabled={reconcilingRef === tx.reference}
+                              onClick={() => handleReconcile(tx.reference)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded text-[11px] font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+                            >
+                              {reconcilingRef === tx.reference ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Reconciling...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="w-3 h-3" /> Reconcile Transaction
+                                </>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
+        </div>
+      )}
+
+      {/* Appeal Review Modal (Inside Admin Dashboard Users Area) */}
+      {selectedAppeal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+                <h3 className="text-base font-extrabold text-slate-900">Review Student Appeal</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAppeal(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Student:</span>
+                <span className="font-bold text-slate-900">{selectedAppeal.fullName || selectedAppeal.userName || 'Student'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Email:</span>
+                <span className="font-mono text-slate-800">{selectedAppeal.schoolEmail}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Matric Number:</span>
+                <span className="font-mono text-slate-800">{selectedAppeal.matricNumber || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Submitted:</span>
+                <span className="text-slate-700">{new Date(selectedAppeal.submittedAt || selectedAppeal.createdAt).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Appeal Explanation</label>
+              <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-200 text-xs text-slate-800 whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                {selectedAppeal.explanation}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Administrator Notes / Reason <span className="text-slate-400 font-normal">(optional for reactivate, recommended for reject)</span>
+              </label>
+              <textarea
+                rows={2}
+                value={appealNotes}
+                onChange={e => setAppealNotes(e.target.value)}
+                placeholder="Enter feedback or internal note for this decision..."
+                className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cu-blue"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => handleProcessAppeal('approved')}
+                disabled={appealActionLoading}
+                className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow transition-colors disabled:opacity-50"
+              >
+                <CheckCircle className="w-4 h-4" /> Reactivate Account
+              </button>
+              <button
+                type="button"
+                onClick={() => handleProcessAppeal('rejected')}
+                disabled={appealActionLoading}
+                className="flex-1 py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+              >
+                <XCircle className="w-4 h-4" /> Reject Appeal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Approval/Rejection Modal */}
+      {selectedRefundOrder && refundActionType && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <form onSubmit={handleProcessRefundSubmit} className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <RotateCcw className={`w-5 h-5 ${refundActionType === 'approved' ? 'text-emerald-600' : 'text-rose-600'}`} />
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {refundActionType === 'approved' ? 'Approve Refund Request' : 'Reject Refund Request'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setSelectedRefundOrder(null); setRefundActionType(null); }}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Product:</span>
+                <span className="font-bold text-slate-900">{selectedRefundOrder.productName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Order Ref:</span>
+                <span className="font-mono text-slate-800">{selectedRefundOrder.orderReference}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Amount:</span>
+                <span className="font-bold text-cu-blue">₦{Number(selectedRefundOrder.amount).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Requester:</span>
+                <span className="font-semibold uppercase text-slate-800">{selectedRefundOrder.cancellationRequestedBy || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Reason:</span>
+                <span className="font-semibold text-slate-800">{selectedRefundOrder.cancellationReason || 'N/A'}</span>
+              </div>
+              {selectedRefundOrder.cancellationExplanation && (
+                <div className="mt-1 pt-1 border-t text-slate-600 text-[11px]">
+                  <strong>Explanation:</strong> {selectedRefundOrder.cancellationExplanation}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {refundActionType === 'approved' ? 'Internal Administrator Notes (Optional)' : 'Reason for Rejection *'}
+              </label>
+              <textarea
+                rows={3}
+                required={refundActionType === 'rejected'}
+                value={refundNotes}
+                onChange={e => setRefundNotes(e.target.value)}
+                placeholder={refundActionType === 'approved' ? 'Add any notes for records...' : 'Explain clearly why the cancellation request is rejected...'}
+                className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cu-blue"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => { setSelectedRefundOrder(null); setRefundActionType(null); }}
+                className="flex-1 py-2.5 px-4 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={refundActionLoading}
+                className={`flex-1 py-2.5 px-4 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow transition-colors disabled:opacity-50 ${
+                  refundActionType === 'approved' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {refundActionLoading ? 'Processing...' : refundActionType === 'approved' ? 'Confirm Approval' : 'Confirm Rejection'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Bulk Withdrawal Approval Modal */}
+      {bulkWithdrawalModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center gap-2 border-b pb-3">
+              <CheckCheck className="w-5 h-5 text-emerald-600" />
+              <h3 className="text-base font-extrabold text-slate-900">Approve All Pending Withdrawals</h3>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Are you sure you want to approve all <strong>{withdrawals.filter(w => w.status === 'pending').length}</strong> pending withdrawal requests?
+            </p>
+
+            <div className="bg-emerald-50 p-3.5 rounded-xl border border-emerald-100 text-xs text-emerald-900 space-y-1">
+              <div><strong>Total Pending Payouts:</strong> {withdrawals.filter(w => w.status === 'pending').length} requests</div>
+              <div><strong>Total Sum:</strong> ₦{withdrawals.filter(w => w.status === 'pending').reduce((s, w) => s + Number(w.amount || 0), 0).toLocaleString()}</div>
+              <div className="text-[11px] text-emerald-700 pt-1">
+                Each transfer will execute independently through Paystack. If any individual transfer fails, the seller's sales balance will be safely restored automatically.
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={() => setBulkWithdrawalModalOpen(false)}
+                className="flex-1 py-2.5 px-4 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={async () => {
+                  setBulkWithdrawalModalOpen(false);
+                  await handleBulkApproveWithdrawals();
+                }}
+                className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow transition-colors disabled:opacity-50"
+              >
+                {bulkProcessing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Processing...
+                  </>
+                ) : (
+                  'Confirm & Payout All'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Withdrawal Execution Summary Dialog */}
+      {bulkSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-extrabold text-slate-900">Bulk Withdrawal Results</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBulkSummary(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-100">
+                <div className="font-extrabold text-base text-slate-900">{bulkSummary.total}</div>
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Total</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-800">
+                <div className="font-extrabold text-base text-emerald-600">{bulkSummary.successful}</div>
+                <div className="text-[10px] font-bold uppercase">Success</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-50 text-rose-800">
+                <div className="font-extrabold text-base text-rose-600">{bulkSummary.failed}</div>
+                <div className="text-[10px] font-bold uppercase">Failed</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-amber-50 text-amber-800">
+                <div className="font-extrabold text-base text-amber-600">{bulkSummary.skipped}</div>
+                <div className="text-[10px] font-bold uppercase">Skipped</div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2 border rounded-xl p-3 bg-slate-50 text-xs">
+              <h4 className="font-bold text-slate-700 text-[11px] uppercase">Transaction Details</h4>
+              {bulkSummary.details.length === 0 ? (
+                <div className="text-slate-400 text-center py-4">No detailed items.</div>
+              ) : (
+                bulkSummary.details.map((item, idx) => (
+                  <div key={idx} className="p-2 bg-white rounded-lg border border-slate-200 flex items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] text-slate-600 truncate">{item.reference || item.requestId}</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                      item.status === 'successful' ? 'bg-emerald-100 text-emerald-800' :
+                      item.status === 'skipped' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                    }`}>
+                      {item.status}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setBulkSummary(null)}
+              className="w-full py-2.5 bg-cu-blue hover:bg-cu-blue/90 text-white rounded-xl text-xs font-bold shadow transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Central Ledger Status History Modal */}
+      {selectedLedgerTx && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <History className="w-5 h-5 text-cu-blue" />
+                <h3 className="text-base font-extrabold text-slate-900">Ledger Status History</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedLedgerTx(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Reference:</span>
+                <span className="font-mono font-bold text-slate-900">{selectedLedgerTx.reference}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Amount:</span>
+                <span className="font-bold text-slate-900">₦{Number(selectedLedgerTx.amount).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Current eBron Status:</span>
+                <span className="font-bold uppercase text-cu-blue">{selectedLedgerTx.eBronStatus}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Paystack Status:</span>
+                <span className="font-bold uppercase text-slate-700">{selectedLedgerTx.paystackStatus}</span>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 text-xs">
+              <h4 className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Chronological Status Transitions</h4>
+              {(() => {
+                let history: StatusHistoryItem[] = [];
+                if (Array.isArray(selectedLedgerTx.statusHistory)) {
+                  history = selectedLedgerTx.statusHistory;
+                } else if (typeof selectedLedgerTx.statusHistory === 'string') {
+                  try { history = JSON.parse(selectedLedgerTx.statusHistory); } catch (e) { history = []; }
+                }
+
+                if (history.length === 0) {
+                  return <div className="text-slate-400 py-4 text-center">No transition history recorded for this transaction.</div>;
+                }
+
+                return (
+                  <div className="relative pl-4 border-l-2 border-slate-200 space-y-3 my-2">
+                    {history.map((h, i) => (
+                      <div key={i} className="relative">
+                        <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-cu-blue ring-4 ring-white" />
+                        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold uppercase text-[11px] text-slate-900">{h.status || h.eBronStatus}</span>
+                            <span className="text-[10px] text-slate-400">{h.timestamp ? new Date(h.timestamp).toLocaleString() : '-'}</span>
+                          </div>
+                          {(h.reason || h.details) && (
+                            <div className="text-[11px] text-slate-600 mt-1">{h.reason || h.details}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedLedgerTx(null)}
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
     </div>

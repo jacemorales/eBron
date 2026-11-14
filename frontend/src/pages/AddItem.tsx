@@ -25,6 +25,7 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
   const [price, setPrice] = useState('');
   const [condition, setCondition] = useState<ProductCondition>('Fairly Used');
   const [stockNumber, setStockNumber] = useState('');
+  const [stockQty, setStockQty] = useState('1');
   const [images, setImages] = useState<string[]>([]);
   const [primaryIndex, setPrimaryIndex] = useState(0);
   const [urlInput, setUrlInput] = useState('');
@@ -55,6 +56,7 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
       price: Number(price),
       condition,
       stockNumber: stockNumber.trim() || undefined,
+      initialStock: Math.max(1, parseInt(stockQty) || 1),
       images,
       primaryIndex
     });
@@ -98,21 +100,34 @@ export const AddItem: React.FC<{ onToast: (type: 'success' | 'error' | 'info', m
           </div>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="block font-bold">Stock Number (Optional)</label>
-            <span className="text-[10px] text-slate-400 font-semibold">Optional reference</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-bold">Stock Number (Optional)</label>
+              <span className="text-[10px] text-slate-400 font-semibold">Optional reference</span>
+            </div>
+            <input
+              type="text"
+              value={stockNumber}
+              onChange={e => setStockNumber(e.target.value)}
+              placeholder="e.g. STK-1004 or SKU-A02"
+              className="w-full px-3 py-2 border rounded-xl font-mono text-xs focus:border-cu-blue"
+            />
           </div>
-          <input
-            type="text"
-            value={stockNumber}
-            onChange={e => setStockNumber(e.target.value)}
-            placeholder="e.g. STK-1004 or SKU-A02"
-            className="w-full px-3 py-2 border rounded-xl font-mono text-xs focus:border-cu-blue"
-          />
-          <p className="text-[10px] text-slate-400 mt-1">
-            Enter a unique inventory or stock reference code if you use one. Leave blank if not applicable.
-          </p>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-bold">Stock Quantity</label>
+              <span className="text-[10px] text-slate-400 font-semibold">Default: 1 unit</span>
+            </div>
+            <input
+              type="number"
+              min="1"
+              value={stockQty}
+              onChange={e => setStockQty(e.target.value)}
+              placeholder="1"
+              className="w-full px-3 py-2 border rounded-xl text-xs font-bold focus:border-cu-blue"
+            />
+          </div>
         </div>
 
         <div>

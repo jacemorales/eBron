@@ -23,6 +23,7 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState('');
+  const [selectedQty, setSelectedQty] = useState(1);
 
   // Report Modal States
   const [reportModalOpen, setReportModalOpen] = useState(false);
@@ -78,7 +79,12 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
     if (!user) { navigate('/login?redirect=' + encodeURIComponent(window.location.pathname)); return; }
     if (!product) return;
     if (user.userId === product.sellerId) { onToast('error', 'Cannot buy your own product.'); return; }
-    navigate(`/checkout/${product.productId}`);
+    const available = product.availableStock !== undefined ? product.availableStock : 1;
+    if (available <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available') {
+      onToast('error', 'This item is sold out.');
+      return;
+    }
+    navigate(`/checkout/${product.productId}?qty=${selectedQty}`);
   };
 
   const handleOpenReport = () => {
@@ -150,6 +156,20 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                   <Tag className="w-3 h-3 text-amber-600" /> Stock #{product.stockNumber}
                 </span>
               )}
+              {(() => {
+                const availableStock = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
+                const isSoldOut = availableStock <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+
+                return isSoldOut ? (
+                  <span className="text-xs bg-rose-50 text-rose-700 border border-rose-200 font-bold px-2.5 py-0.5 rounded">
+                    Sold Out
+                  </span>
+                ) : (
+                  <span className="text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold px-2.5 py-0.5 rounded">
+                    {availableStock} in stock
+                  </span>
+                );
+              })()}
             </div>
             <h1 className="text-2xl font-extrabold text-slate-900">{product.name}</h1>
             <div className="text-2xl font-black text-cu-blue">₦{Number(product.price).toLocaleString()}</div>
@@ -161,23 +181,54 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
           </div>
 
           <div className="space-y-3 pt-4 border-t border-slate-100">
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleChat}
-                className="flex-1 py-3 border-2 border-cu-blue text-cu-blue rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-cu-blue hover:text-white transition"
-              >
-                <MessageSquare className="w-4 h-4" /> Chat with Seller
-              </button>
-              <button
-                type="button"
-                onClick={handleBuy}
-                disabled={product.availability !== 'available'}
-                className="flex-1 py-3 bg-cu-gold hover:bg-cu-goldHover disabled:opacity-50 text-cu-blue rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition"
-              >
-                <ShoppingBag className="w-4 h-4" /> Buy Now
-              </button>
-            </div>
+            {(() => {
+              const availableStock = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
+              const isSoldOut = availableStock <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+
+              return (
+                <>
+                  {!isSoldOut && availableStock > 1 && (
+                    <div className="flex items-center gap-2 pb-1">
+                      <label className="text-xs font-bold text-slate-700">Quantity:</label>
+                      <select
+                        value={selectedQty}
+                        onChange={e => setSelectedQty(Math.min(availableStock, Math.max(1, Number(e.target.value))))}
+                        className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-bold bg-white focus:outline-none focus:ring-2 focus:ring-cu-blue"
+                      >
+                        {Array.from({ length: Math.min(availableStock, 10) }, (_, i) => i + 1).map(q => (
+                          <option key={q} value={q}>{q} {q === 1 ? 'unit' : 'units'}</option>
+                        ))}
+                      </select>
+                      {selectedQty > 1 && (
+                        <span className="text-xs font-bold text-slate-500">
+                          Total: ₦{Number(product.price * selectedQty).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={handleChat}
+                      className="flex-1 py-3 border-2 border-cu-blue text-cu-blue rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-cu-blue hover:text-white transition"
+                    >
+                      <MessageSquare className="w-4 h-4" /> Chat with Seller
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBuy}
+                      disabled={isSoldOut}
+                      className={`flex-1 py-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition ${
+                        isSoldOut ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-cu-gold hover:bg-cu-goldHover text-cu-blue'
+                      }`}
+                    >
+                      <ShoppingBag className="w-4 h-4" /> {isSoldOut ? 'Sold Out' : 'Buy Now'}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Unobtrusive Report Product Link */}
             {(!user || user.userId !== product.sellerId) && (

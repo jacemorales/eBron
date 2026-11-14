@@ -4,7 +4,7 @@ export type FemaleHall = 'Mary' | 'Lydia' | 'Deborah' | 'Dorcas';
 export type Hall = MaleHall | FemaleHall;
 
 export type UserRole = 'student' | 'admin';
-export type UserStatus = 'active' | 'suspended';
+export type UserStatus = 'active' | 'suspended' | 'deactivated';
 
 export interface User {
   userId: string;
@@ -46,6 +46,11 @@ export interface Product {
   price: number;
   condition: ProductCondition;
   stockNumber?: string;
+  initialStock?: number;
+  availableStock?: number;
+  soldQuantity?: number;
+  stockStatus?: 'in_stock' | 'sold_out';
+  stockQuantity?: number;
   primaryImageUrl: string;
   images: string[];
   availability: ProductAvailability;
@@ -124,6 +129,8 @@ export type OrderStatus =
   | 'payment_successful'
   | 'awaiting_seller_confirmation'
   | 'awaiting_buyer_confirmation'
+  | 'refund_pending_approval'
+  | 'refunded'
   | 'completed'
   | 'cancelled'
   | 'disputed';
@@ -139,6 +146,7 @@ export interface Order {
   sellerId: string;
   sellerName?: string;
   amount: number;
+  quantity?: number;
   status: OrderStatus;
   paymentMode: 'WALLET_ESCROW' | 'PAYPAL';
   paymentRef: string;
@@ -149,6 +157,14 @@ export interface Order {
   sellerConfirmedAt: string | null;
   buyerConfirmedAt: string | null;
   completedAt: string | null;
+  cancellationRequestedBy?: 'buyer' | 'seller';
+  cancellationReason?: string;
+  cancellationExplanation?: string;
+  cancellationRequestedAt?: string;
+  refundStatus?: 'none' | 'pending_approval' | 'approved' | 'rejected';
+  refundAdminNotes?: string;
+  refundProcessedAt?: string;
+  disputeReason?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -167,7 +183,7 @@ export type Wallet = BuyerWallet;
 export interface WalletTransaction {
   transactionId: string;
   userId: string;
-  type: 'topup' | 'purchase_deduction';
+  type: 'topup' | 'purchase_deduction' | 'refund';
   amount: number;
   reference: string;
   status: 'successful' | 'pending' | 'failed';
@@ -192,12 +208,19 @@ export interface SalesTransaction {
   orderId?: string;
   orderReference?: string;
   amount: number;
-  type: 'pending_sale' | 'released_sale' | 'withdrawal';
-  status: 'pending' | 'completed' | 'disputed';
+  type: 'pending_sale' | 'released_sale' | 'withdrawal' | 'cancelled_sale';
+  status: 'pending' | 'completed' | 'disputed' | 'refunded';
   createdAt: string;
 }
 
-export type WithdrawalStatus = 'pending' | 'approved' | 'rejected' | 'processed';
+export type WithdrawalStatus =
+  | 'pending'
+  | 'processing'
+  | 'successful'
+  | 'failed'
+  | 'approved'
+  | 'rejected'
+  | 'processed';
 
 export interface WithdrawalRequest {
   requestId: string;
@@ -206,12 +229,39 @@ export interface WithdrawalRequest {
   userName?: string;
   amount: number;
   bankName: string;
+  bankCode?: string;
   accountNumber: string;
   accountName: string;
   status: WithdrawalStatus;
+  reference?: string;
+  paystackRecipientCode?: string;
+  paystackTransferCode?: string;
+  paystackStatus?: string;
   adminNotes: string;
   processedAt: string | null;
   createdAt: string;
+}
+
+export interface Bank {
+  id: number | string;
+  name: string;
+  code: string;
+}
+
+export interface AccountAppeal {
+  appealId: string;
+  userId: string;
+  userName?: string;
+  fullName?: string;
+  matricNumber?: string;
+  schoolEmail: string;
+  explanation: string;
+  status: 'pending' | 'approved' | 'rejected';
+  adminNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  submittedAt?: string;
 }
 
 export interface NotificationItem {
@@ -224,3 +274,48 @@ export interface NotificationItem {
   isRead: boolean;
   createdAt: string;
 }
+
+export interface StatusHistoryItem {
+  status: string;
+  eBronStatus?: string;
+  paystackStatus?: string;
+  timestamp: string;
+  reason?: string;
+  details?: string;
+}
+
+export interface FinancialTransaction {
+  transactionId: string;
+  reference: string;
+  userId: string;
+  buyerId?: string;
+  sellerId?: string;
+  productId?: string;
+  orderId?: string;
+  type: 'topup' | 'purchase' | 'refund' | 'sales_credit' | 'withdrawal' | 'withdrawal_request' | string;
+  amount: number;
+  paymentMethod: string;
+  paymentProvider: string;
+  eBronStatus: string;
+  paystackStatus: string;
+  statusHistory: StatusHistoryItem[] | string;
+  createdAt: string;
+  updatedAt: string;
+  verificationDetails?: string;
+  errorMessage?: string;
+}
+
+export interface BulkWithdrawalSummary {
+  total: number;
+  successful: number;
+  failed: number;
+  skipped: number;
+  details: Array<{
+    requestId: string;
+    status: 'successful' | 'failed' | 'skipped';
+    reference?: string;
+    error?: string;
+    reason?: string;
+  }>;
+}
+

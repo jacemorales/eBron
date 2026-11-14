@@ -78,3 +78,38 @@ export function validateDeliveryProfile(data) {
   }
   return { valid: errors.length === 0, errors };
 }
+
+export const USER_STATUS = {
+  ACTIVE: 'active',
+  SUSPENDED: 'suspended',
+  DEACTIVATED: 'deactivated'
+};
+
+export function checkAccountActive(user) {
+  if (!user) return { active: false, allowed: false, error: 'User does not exist.' };
+  if (user.status === USER_STATUS.DEACTIVATED || user.status === USER_STATUS.SUSPENDED) {
+    return {
+      active: false,
+      allowed: false,
+      status: user.status,
+      error: 'Your account has been deactivated. Access to marketplace operations is restricted.'
+    };
+  }
+  return { active: true, allowed: true };
+}
+
+export function validateAppeal(user, explanation, existingAppeals = []) {
+  const errors = [];
+  if (!user) errors.push('Account not found.');
+  if (user && user.status !== USER_STATUS.DEACTIVATED && user.status !== USER_STATUS.SUSPENDED) {
+    errors.push('Your account is currently active. Only deactivated accounts may submit an appeal.');
+  }
+  if (!explanation || typeof explanation !== 'string' || explanation.trim().length < 10) {
+    errors.push('Please provide a detailed explanation of at least 10 characters.');
+  }
+  if (existingAppeals && existingAppeals.some(a => a.userId === user?.userId && a.status === 'pending')) {
+    errors.push('You already have a pending appeal awaiting administrative review. Please wait for the admin decision.');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
