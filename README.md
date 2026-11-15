@@ -38,24 +38,31 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
   - Each entry maintains a persistent JSON `statusHistory` audit trail preserving every status transition with timestamps and reasons.
   - **Reconciliation Engine**: Transactions where Paystack succeeded but eBron fulfillment encountered client or network interruptions can be reconciled with one click in the Admin Dashboard, crediting the user's wallet safely without recharging.
 
-- **Optimized Bank Withdrawals (Opay, Moniepoint, PalmPay)**:
+- **Simplified & Safe Bank Withdrawals (Opay, Moniepoint, PalmPay)**:
   - Bank payouts are strictly restricted to **Opay** (`999992`), **Moniepoint** (`50515`), and **PalmPay** (`999991`) for guaranteed and faster processing.
   - Enforces strict 10-numerical-digit account number validation (`/^\d{10}$/`).
-  - Available sales funds are locked/reserved immediately upon withdrawal request to prevent double-spending.
-  - Real Paystack transfer execution is deferred to administrative approval.
-  - **Approve All Bulk Payouts**: Administrators can approve all pending withdrawals in bulk, with each request executed independently and summarized in a detailed execution dialog.
-  - If a transfer fails or is rejected, funds are automatically restored to the seller's available balance.
+  - **Submitting a withdrawal request NEVER contacts Paystack.** The request is written to the `WithdrawalRequests` sheet with status `Pending Approval`, and the requested amount is moved from **Available** to **Reserved** immediately (preventing double-spending) — but no recipient is created, no transfer is initiated, and no funds are permanently deducted.
+  - For safety, the amount stays reserved if a transfer fails (funds are never lost or duplicated) and can be safely retried.
+  - **Approve All Bulk Payouts**: Administrators can approve all pending withdrawals in bulk, with each request executed independently through the same backend workflow and summarized in a detailed execution dialog.
+  - Rejecting a request releases the reserved amount back to the seller's available balance.
+  - **Seller-Initiated Cancellation**: A seller can cancel their own request from **Sales Balance** while it is still awaiting approval (status `pending`, or `failed` without a Paystack transfer code). Cancelling sets the status to `Cancelled`, releases the reserved amount back to **Available**, records the cancellation in the withdrawal history **and** the central `Transactions` ledger, and notifies the seller. Requests already paid out, in `processing`, already `rejected`/`reversed`, or a `failed` request that produced a transfer code **cannot** be cancelled. Cancelling an already-cancelled request is a safe no-op and can never release funds twice.
+
+- **Admin-Approved Withdrawal Payouts — Paystack OR Manual Bank Transfer**:
+  - Clicking **Approve** opens a method-selection modal. The administrator **must** explicitly choose **Paystack Transfer** or **Manual Bank Transfer** — there is no default and the method cannot be switched once processing starts.
+  - **Paystack path (automated)**: Paystack is called **only after an administrator explicitly approves** a request, using one shared backend helper (`processSingleWithdrawalApproval`) for both individual and bulk approvals. On approval the request is moved to `Processing` **before** any Paystack call, the recipient is created/retrieved, and a transfer is initiated with a unique reference. A request is only marked `Successful` once the transfer is confirmed; if it fails, the exact error is recorded, the status becomes `Failed`, and funds remain reserved for investigation/safe retry. The Paystack secret key is read server-side only and is never exposed to the frontend.
+  - **Manual bank transfer path (owner action)**: The modal shows the real saved payout details — the seller's full name, amount, bank name, account number, withdrawal reference, and request date. The administrator transfers the funds out-of-band, then records the outcome:
+    - **I Have Transferred** opens a confirmation step; confirming marks the request `Successful`, sets `paymentMethod = manual_bank_transfer`, records the confirming admin (`manualConfirmedBy`) and timestamp (`manualConfirmedAt`), finalizes the reserved-balance deduction, writes to the history + `Transactions` ledger, and notifies the seller. eBron **never** marks a manual transfer successful without this explicit admin confirmation.
+    - **Transfer Failed** requires a failure explanation, saves it as `failureReason`, sets the status to `Failed`, releases the reserved amount back to Available (because no payment was made), and notifies the seller so they can safely retry.
+  - The same safeguards apply to both methods: money is never released or deducted twice, a request cannot be processed by both methods, and the responsible administrator is always recorded.
+
+- **Live Pending Counters in Navigation**:
+  - The **Pending Purchases** and **Pending Sales** navigation entries show a live count for the signed-in user, polled every 10 seconds and refreshed on navigation.
+  - Counts are computed server-side per-user (endpoint `getPendingCounts`) from real saved order data and exclude any order that is already `completed`, `cancelled`, `refunded`, or `rejected`, so the badge hides automatically when there is nothing pending. Because they are derived from the shared sheet, they stay consistent across sessions and devices.
 
 - **Multi-Unit Inventory & Stock Management**:
   - Listings track `initialStock`, `availableStock`, `soldQuantity`, and `stockStatus` (`in_stock` vs `sold_out`).
   - Real-time stock decrement upon purchase with strict overselling prevention.
   - Sold-out listings are automatically badged as **Sold Out** and hidden from public marketplace browsing, while remaining visible in the seller's catalog and administrative panels.
-
-- **Automated Paystack Withdrawals**:
-  - Sellers initiate payout requests directly to their Nigerian bank account.
-  - Live bank selection dropdown and real-time Paystack NUBAN account name resolution (`/bank/resolve`).
-  - Withdrawals are processed server-side in Google Apps Script using the Paystack Transfers API (`/transferrecipient` and `/transfer`).
-  - If a transfer fails or is rejected by an administrator, funds are automatically reversed to the seller's available sales balance.
 
 - **Account Deactivation, Enforcement & Appeals**:
   - Administrators can deactivate or reactivate user accounts directly from the Admin Dashboard Users tab.
@@ -67,13 +74,20 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
   - Chat threads and individual messages are unified inside a single `Messages` sheet.
   - In-app notification alerts and web-push subscriptions are consolidated into a single `Notifications` sheet.
 
+- **User Feedback & Admin Triage**:
+  - Authenticated students submit feedback from the **Guidelines & Safety** page across four categories: `Issue/Problem`, `Suggestion`, `Positive Feedback`, and `General Feedback`.
+  - A feedback type and message are required; the student's ID, category, subject, message, and submission timestamp are stored in the `Feedback` sheet with an initial status of `New`.
+  - Submissions are strictly private — a student only ever sees their own feedback (`getMyFeedback`), and admin notes are stripped from any non-admin response.
+  - Administrators triage feedback in the **User Feedback** tab of the Admin Dashboard: search and filter by category, status, and submission date, view full messages, advance status between `New` → `Under Review` → `Resolved`, and attach internal admin notes.
+  - Admins are notified in-app when new feedback arrives.
+
 - **Primary Database**: Google Sheets operated via Google Apps Script (GAS) Web App (`backend/Code.gs`).
 
 ---
 
-## 2. Google Sheets Database Blueprint (16 Sheets)
+## 2. Google Sheets Database Blueprint (17 Sheets)
 
-The database consists of 16 structured sheets. To initialize or update your spreadsheet automatically, run `setupDatabase()` or `initializeAllSheets()` in `backend/Code.gs`.
+The database consists of 17 structured sheets. To initialize or update your spreadsheet automatically, run `setupDatabase()` or `initializeAllSheets()` in `backend/Code.gs`.
 
 ### Sheet 1: `Users`
 - **Purpose**: Student accounts, administrative roles, residence details, and security credentials.
@@ -129,9 +143,9 @@ The database consists of 16 structured sheets. To initialize or update your spre
 - **Transaction Types**: `'topup'`, `'purchase_deduction'`, `'refund_credit'`.
 
 ### Sheet 9: `SalesBalances` (Seller Escrow & Earnings)
-- **Purpose**: Tracks seller revenue, separating pending escrow amounts from withdrawable sales earnings.
+- **Purpose**: Tracks seller revenue, separating pending escrow amounts, withdrawable earnings, and funds reserved by pending withdrawal requests.
 - **Columns (in exact order)**:
-  `salesBalanceId`, `userId`, `availableBalance`, `pendingBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
+  `salesBalanceId`, `userId`, `availableBalance`, `pendingBalance`, `reservedBalance`, `totalEarnings`, `totalWithdrawals`, `updatedAt`
 
 ### Sheet 10: `SalesTransactions` (Seller Income Ledger)
 - **Purpose**: Granular ledger of seller sales credits, escrow releases upon dual confirmation, and processed withdrawals.
@@ -139,11 +153,13 @@ The database consists of 16 structured sheets. To initialize or update your spre
   `transactionId`, `sellerId`, `orderId`, `orderReference`, `amount`, `type`, `status`, `createdAt`
 - **Transaction Types**: `'pending_sale'`, `'released_sale'`, `'withdrawal'`, `'cancelled_sale'`.
 
-### Sheet 11: `WithdrawalRequests` (Paystack Bank Payouts)
-- **Purpose**: Bank transfer payout requests submitted by sellers from their available sales balance.
+### Sheet 11: `WithdrawalRequests` (Admin-Approved Bank Payouts)
+- **Purpose**: Bank transfer payout requests submitted by sellers from their available sales balance, plus the full admin-approval lifecycle for **both** Paystack and manual bank transfers, including cancellations.
 - **Columns (in exact order)**:
-  `requestId`, `userId`, `userName`, `userEmail`, `amount`, `bankName`, `bankCode`, `accountNumber`, `accountName`, `status`, `reference`, `paystackRecipientCode`, `paystackTransferCode`, `paystackStatus`, `adminNotes`, `processedAt`, `createdAt`
-- **Statuses**: `'pending'`, `'processing'`, `'successful'`, `'failed'`, `'rejected'`, `'processed'`.
+  `requestId`, `userId`, `userName`, `userRegNumber`, `userEmail`, `amount`, `bankName`, `bankCode`, `accountNumber`, `accountName`, `status`, `reference`, `paystackRecipientCode`, `paystackTransferCode`, `paystackStatus`, `paymentMethod`, `adminId`, `manualConfirmedBy`, `manualConfirmedAt`, `rejectionReason`, `failureReason`, `adminNotes`, `processedAt`, `completedAt`, `createdAt`, `updatedAt`
+- **Statuses**: `'pending'` (Pending Approval), `'processing'`, `'successful'`, `'failed'`, `'rejected'`, `'reversed'`, `'cancelled'`.
+- **`paymentMethod`**: `''` (undecided), `'paystack'`, or `'manual_bank_transfer'`. Set when an administrator chooses the payout method and never switched once processing begins.
+- **`adminId`**: administrator who approved/rejected the request. **`manualConfirmedBy` / `manualConfirmedAt`**: the administrator and timestamp that confirmed a manual bank transfer actually completed. **`failureReason`**: reason a manual or Paystack transfer failed, or the reason a request was cancelled.
 
 ### Sheet 12: `Appeals` (Account Deactivation Appeals)
 - **Purpose**: Formal appeals submitted by deactivated or suspended students for administrative review.
@@ -177,6 +193,14 @@ The database consists of 16 structured sheets. To initialize or update your spre
 - **Types**: `'topup'`, `'purchase'`, `'refund'`, `'sales_credit'`, `'withdrawal'`, `'withdrawal_request'`.
 - **eBron Statuses**: `'pending'`, `'completed'`, `'failed'`, `'requires_reconciliation'`, `'rejected'`.
 - **statusHistory**: A JSON-serialized array preserving each sequential state change (timestamp, status, reason/error).
+
+### Sheet 17: `Feedback` (User Feedback & Admin Triage)
+- **Purpose**: Stores feedback submitted by authenticated students from the **Guidelines & Safety** page, with admin triage status and internal notes.
+- **Columns (in exact order)**:
+  `feedbackId`, `userId`, `userName`, `userEmail`, `type`, `subject`, `message`, `status`, `adminNotes`, `createdAt`, `updatedAt`
+- **Feedback Types**: `'Issue/Problem'`, `'Suggestion'`, `'Positive Feedback'`, `'General Feedback'`.
+- **Statuses**: `'New'`, `'Under Review'`, `'Resolved'`.
+- **adminNotes**: Administrator-only internal notes. This column is never returned to non-admin requests (`getMyFeedback` strips it).
 
 ---
 
@@ -238,7 +262,8 @@ VITE_PAYSTACK_PUBLIC_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxx
 6. Configure Paystack Secret Key:
    - Navigate to **Project Settings > Script Properties** in Apps Script.
    - Add property: `PAYSTACK_SECRET_KEY` = `sk_test_...` (or `sk_live_...`).
-7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 16 sheets.
+   - **Important**: The secret key must be the `sk_...` **secret** key (never the `pk_...` public key). It is read exclusively server-side by `paystackApiCall()` and is never sent to the frontend.
+7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 17 sheets (including the `Feedback` sheet).
 8. Click **Deploy > New deployment**:
    - **Type**: Web app
    - **Description**: eBron Production API
@@ -246,9 +271,106 @@ VITE_PAYSTACK_PUBLIC_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxx
    - **Who has access**: Anyone
 9. Copy the **Web App URL** and paste it into `frontend/.env` as `VITE_API_URL`.
 
+> **Required manual authorization step for bank withdrawals**: Live Paystack payouts call `UrlFetchApp.fetch()` inside `paystackApiCall()`, which needs the `https://www.googleapis.com/auth/script.external_request` scope. Adding this scope does **not** re-authorize an existing deployment — you must **(a)** confirm the scope is present in `appsscript.json`, **(b)** run any function once from the Apps Script editor and click **"Review permissions" → Allow** to grant/refresh authorization, and **(c)** create a **new deployment version** (**Deploy > Manage deployments > Edit > Version: New version > Deploy**) so the live Web App runs the updated code. Without this, withdrawals fail with a `UrlFetchApp` permission error.
+
+### 4. Configure Paystack for Bank Transfers
+Transfers (admin approvals) require more than a secret key. Complete all of the following in your Paystack dashboard and Apps Script project:
+
+1. **Secret key (Script Property)** — In Apps Script **Project Settings > Script Properties**, set `PAYSTACK_SECRET_KEY` to your `sk_test_...` (testing) or `sk_live_...` (production) key. Never use the `pk_...` public key here and never place the secret key in the frontend.
+2. **Transfers enabled** — In Paystack Dashboard, enable **Transfers** for your business/account. New accounts may require identity/business verification before transfers are permitted.
+3. **Settlement/balance** — Ensure your Paystack balance has enough settled funds. Transfers fail when the available balance is insufficient.
+4. **Optional transfer OTP** — Some Paystack accounts require a one-time transfer OTP. If enabled, transfers initiated by the API will return a `pending`/OTP-required response instead of completing immediately; eBron records the response and keeps the request for review rather than marking it successful.
+5. **Webhook (recommended)** — In Paystack Dashboard **Settings > API Keys & Webhooks**, set your Webhook URL to the deployed Web App URL (`VITE_API_URL`). This lets Paystack notify eBron of asynchronous `transfer.success`, `transfer.failed`, and `transfer.reversed` events.
+6. **Bank codes** — eBron supports only Opay (`999992`), Moniepoint (`50515`), and PalmPay (`999991`). These match Paystack's transfer recipient bank codes; if a code changes, update the supported-bank list in `backend/Code.gs` and the frontend.
+7. **Safe testing** — Use **Test mode** keys first. Verify withdrawals end-to-end with test banks/Paystack test transfer recipients before switching to `sk_live_...`. Note that a test-mode transfer does not move real money.
+
+> **Manual steps required before production withdrawals work** (none of these are automated):
+> 1. Set `PAYSTACK_SECRET_KEY` in Script Properties (secret key only).
+> 2. Confirm `appsscript.json` includes the `script.external_request` scope.
+> 3. Authorize the scopes once (Run any function → **Review permissions → Allow**).
+> 4. Create a **new deployment version** so the live Web App uses the updated code.
+> 5. Enable **Transfers** and fund your Paystack balance (and resolve any transfer OTP/verification requirement).
+> 6. Point the Paystack **Webhook** at the Web App URL (recommended for async status).
+> 7. Run `initializeAllSheets()` once so all sheets (including the new withdrawal columns) exist in your spreadsheet.
+
+### 5. Configure Manual Bank Transfers (no extra setup required)
+Manual bank transfers need **no** Paystack configuration and **no** additional environment variables — they are performed by an administrator manually. Only the standard deployment below is required:
+
+1. Ensure `initializeAllSheets()` has been run so `WithdrawalRequests` contains the `paymentMethod`, `manualConfirmedBy`, `manualConfirmedAt`, and `failureReason` columns (existing spreadsheets are migrated non-destructively — no existing data is lost).
+2. Create a **new deployment version** of the Web App so the live backend serves the manual-transfer handlers (`cancelWithdrawal`, `processManualWithdrawal`).
+3. When an administrator chooses **Manual Bank Transfer**, a human must transfer the funds to the seller's saved bank account (out-of-band, e.g. via the bank app) and then record **I Have Transferred** or **Transfer Failed** in the Admin Dashboard. eBron never performs a manual bank transfer automatically and never marks one successful without that explicit step.
+4. Keep the seller's bank details accurate: manual transfers use the account details saved on the withdrawal request (full name, bank name, account number). Only Opay, Moniepoint and PalmPay are accepted.
+
+### 6. Deployment steps (summary)
+Do these in order whenever you update the backend:
+
+1. Paste the latest `backend/Code.gs` into the Apps Script editor and save.
+2. Set/confirm `SPREADSHEET_ID` and the `PAYSTACK_SECRET_KEY` Script Property.
+3. Confirm `appsscript.json` includes the `script.external_request` scope and authorize once (**Review permissions → Allow**).
+4. Run `initializeAllSheets()` / `setupDatabase()` once to create or non-destructively migrate every sheet (including the new withdrawal columns).
+5. **Deploy > Manage deployments > Edit > Version: New version > Deploy** so the live Web App runs the updated code.
+6. Update `frontend/.env` (`VITE_API_URL`, `VITE_PAYSTACK_PUBLIC_KEY`), then rebuild the frontend (`cd frontend && npm run build`).
+
 ---
 
-## 4. Default Administrator Credentials
+## 4. Withdrawal Workflow
+
+### End-to-end lifecycle
+```
+User submits → eBron saves request (Available → Reserved)
+→ Admin reviews → Admin chooses payout method
+   ├─ Paystack Transfer  → Backend calls Paystack → verified → Successful  (automatic)
+   └─ Manual Bank Transfer → Admin transfers out-of-band → records outcome
+                            ├─ I Have Transferred → Successful
+                            └─ Transfer Failed     → Failed (reserved released)
+```
+On rejection or cancellation: reserved funds return to the seller's available balance.
+
+### Automatic eBron processes vs. manual owner actions
+- **Automatic (eBron does this for you)**: request creation, reservation/validation, the Paystack recipient + transfer call on approval, Paystack status verification, balance finalisation, ledger/history writes, notifications, and all duplicate/monetary safeguards.
+- **Manual owner actions (a human must do these)**: funding/verifying the Paystack business account, enabling Transfers, satisfying any transfer-OTP/business verification, **physically making a bank transfer when the Manual method is chosen**, and clicking **I Have Transferred**/**Transfer Failed** to record that outcome. eBron will **never** claim a manual transfer succeeded without that explicit confirmation. The list of manual steps below must be completed by the account owner outside the codebase.
+
+### User side (never touches Paystack)
+1. The seller opens **Sales Balance** and enters an amount, selects a supported bank, and a **10-digit account number**.
+2. Validation (amount, sufficient available balance, bank, exactly 10 digits) runs on the client **and** the backend.
+3. The backend generates a unique reference, writes the request with status `Pending Approval`, and moves the amount from **Available** to **Reserved**.
+4. Admins are notified; the seller sees *"Your withdrawal request has been submitted successfully and is awaiting admin approval."*
+5. Submitting performs **no** Paystack call, recipient creation, transfer initiation, or permanent deduction — and works even if Paystack is unavailable.
+6. **Cancelling before approval**: while the request is still `pending` (or `failed` without a Paystack transfer code) the seller can cancel it from **Sales Balance**. This sets the status to `Cancelled`, releases the reserved amount back to **Available**, records the cancellation in the withdrawal history + `Transactions` ledger, and notifies the seller. Cancelling an already-cancelled request is a safe no-op and can never release funds twice; a request that is already `successful`/`processing`/`rejected`/`reversed`, or a `failed` request with a transfer code, cannot be cancelled.
+
+### Admin side
+1. The **Withdrawals** tab lists Request ID, student (name, registration number, email), amount, bank details, submission time, unique reference, and status.
+2. Filter by **Pending Approval / Processing / Successful / Rejected / Failed / Reversed / Cancelled**, or search by user, reference, or request ID.
+3. **Approve** opens a **method-selection modal** — the administrator must choose one:
+   - **Paystack Transfer** — shows a confirmation prompt, then runs the existing secure backend transfer workflow.
+   - **Manual Bank Transfer** — shows the seller's real payout details (full name, amount, bank name, account number, reference, request date) plus two actions:
+     - **I Have Transferred** → a confirmation step; confirming marks the request `Successful` (`paymentMethod = manual_bank_transfer`), records the confirming admin + timestamp, finalises the reserved deduction, updates history/ledger, and notifies the seller.
+     - **Transfer Failed** → requires a failure explanation; saves it as `failureReason`, sets `Failed`, releases the reserved amount back to Available, and notifies the seller so they can retry.
+4. **Reject** prompts for a reason, releases the reserved funds, and notifies the seller.
+5. **Approve All Pending** shows a confirmation modal with the count and total, then processes each eligible request independently (still through the Paystack workflow) and shows a summary (**total / successful / failed / skipped**). Individual failures do not stop the batch. Already-cancelled requests are never treated as pending and are excluded automatically.
+
+### Backend transfer rules (`processSingleWithdrawalApproval`, Paystack path)
+- Skips already-`successful` / `rejected` / `reversed` / `cancelled` requests; skips in-flight `processing` requests that already have a transfer code.
+- Sets status to `Processing` **before** any Paystack call.
+- Validates the 10-digit account number and bank code; best-effort account-name resolution (non-blocking).
+- Creates/retrieves the Paystack recipient and initiates a transfer with a unique reference.
+- Marks `Successful` only when confirmed; on failure records the exact error, sets `Failed`, and **keeps funds reserved** (never lost or duplicated).
+- Duplicate-transfer protection prevents a second transfer for the same request; a delayed/unclear response is never re-sent blindly.
+- A script lock serialises financial operations, and the reservation/ledger entries are recorded in the central `Transactions` ledger at every stage.
+
+### Manual transfer rules (`cancelWithdrawal`, `processManualWithdrawal`)
+- Only requests that have **not** entered payment processing may be cancelled; cancellation releases the reservation exactly once (guarded by status), so a repeat click is a no-op.
+- A manual transfer is marked `Successful` **only** on an explicit admin confirmation; there is no code path that auto-succeeds it.
+- Reporting a manual failure **requires** a reason, releases the reservation (no payment was made), and keeps the request retryable.
+- Money can never be released or deducted twice, and a request can never be processed by both methods simultaneously.
+- The responsible administrator is recorded on approve (`adminId`) and on manual confirmation (`manualConfirmedBy` / `manualConfirmedAt`).
+
+### Status history & audit
+Every withdrawal keeps an append-only record across **Sales Balance history**, the seller's **Transactions**, and the admin dashboard. Recorded fields include: Withdrawal ID, User ID, amount, bank name, account number, payment method, reference, approving admin ID, manual-confirmation admin ID, status, failure reason, and timestamps. The seller's history and the admin dashboard always show the **same actual status**, and prior statuses are never overwritten.
+
+---
+
+## 5. Default Administrator Credentials
 
 Administrator credentials and roles are verified directly in the `Users` sheet in Google Sheets (where `role = 'admin'`).
 
@@ -271,7 +393,7 @@ Administrator credentials and roles are verified directly in the `Users` sheet i
 
 ---
 
-## 5. Verification & Testing
+## 6. Verification & Testing
 
 ### Backend Unit Tests
 Execute the comprehensive Node.js unit test suite:
@@ -279,18 +401,32 @@ Execute the comprehensive Node.js unit test suite:
 npm run test:backend
 ```
 The test suite validates:
-- Database schema coverage and column presence across all 15 sheets.
+- Database schema coverage and column presence across all 17 sheets.
 - Covenant University student email and hostel assignment validations.
 - Buyer wallet top-up, deduction, and refund credits.
 - Seller sales balance pending escrow and availability release.
 - Order creation balance validation and multi-quantity calculations.
 - Buyer and seller cancellation requests with status locking.
 - Admin refund approval (balance reversal, wallet credit, stock restoration).
-- Admin refund rejection (order reactivation with notes).
+- Admin refund rejection (order reactivation with notes, no funds moved).
+- Refund requests appear in the Admin Dashboard Transactions > Refunds view.
 - Multi-unit inventory initialization, decrement, and overselling protection.
 - Marketplace filtering (hiding sold-out products from public browse).
-- Paystack transfer handling (success, bank failure, admin rejection).
-- Account deactivation enforcement, duplicate appeal prevention, and reactivation.
+- Paystack transfer handling (success, bank failure, admin rejection) via `paystackApiCall()`.
+- **Withdrawal submission never calls Paystack** — no recipient creation, transfer initiation, or permanent deduction occurs on submit.
+- A submitted withdrawal request moves the amount from **Available** to **Reserved** and remains `Pending Approval` until an administrator approves it.
+- Insufficient available balance and non-10-digit account numbers are rejected on both client and backend.
+- Admin approval sets `Processing` before the Paystack call and only marks `Successful` when confirmed.
+- Withdrawal failure records the exact error, sets `Failed`, and **keeps funds reserved** (funds are never lost or duplicated; safe retry is permitted).
+- Admin rejection releases the reserved amount back to the seller's available balance.
+- Duplicate-transfer protection prevents the same withdrawal being paid twice.
+- **Approve All** processes each eligible request independently and reports total / successful / failed / skipped without stopping on individual failures.
+- **Withdrawal cancellation** releases the reserved amount exactly once (idempotent repeat cancels are no-ops) and is rejected for `processing`/`successful` and for `failed` requests that produced a transfer code.
+- **Manual bank transfer** confirmation is never marked successful without an explicit admin action; duplicate confirmations are rejected and never deduct twice.
+- **Manual failure** requires an explanation, releases the reservation, and leaves the request retryable.
+- Live pending counters (`getPendingCounts`) count only genuinely pending orders per user and exclude `completed`/`cancelled`/`refunded`/`rejected` orders.
+- User feedback submission (four categories) with private per-user retrieval.
+- Admin feedback retrieval, filtering, status updates, and internal notes.
 
 ### Frontend Production Build
 Validate TypeScript typings and compile the frontend production bundle:
@@ -301,7 +437,7 @@ npm run build
 
 ---
 
-## 6. Technical Troubleshooting & Best Practices
+## 7. Technical Troubleshooting & Best Practices
 
 - **CORS Handling with Google Apps Script**:
   - Google Apps Script Web Apps do not respond to HTTP `OPTIONS` preflight requests.

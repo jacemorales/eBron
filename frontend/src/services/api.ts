@@ -10,6 +10,7 @@ import type {
   SellerBalance,
   SalesTransaction,
   WithdrawalRequest,
+  PendingCounts,
   ProductReport,
   ReportCategory,
   ReportStatus,
@@ -19,7 +20,10 @@ import type {
   Bank,
   AccountAppeal,
   FinancialTransaction,
-  BulkWithdrawalSummary
+  BulkWithdrawalSummary,
+  Feedback,
+  FeedbackType,
+  FeedbackStatus
 } from '../types';
 
 /**
@@ -365,6 +369,19 @@ export const api = {
     }
   },
 
+  // Live pending counters for the navigation badges (per-user, backend-verified).
+  async getPendingCounts(userId: string): Promise<PendingCounts> {
+    try {
+      const res = await gasGet('getPendingCounts', { userId });
+      return {
+        pendingPurchases: Number(res.pendingPurchases) || 0,
+        pendingSales: Number(res.pendingSales) || 0
+      };
+    } catch (err) {
+      return { pendingPurchases: 0, pendingSales: 0 };
+    }
+  },
+
   async sendMessage(conversationId: string, senderId: string, content: string): Promise<{ success: boolean; message?: Message; error?: string }> {
     try {
       const res = await gasPost('sendMessage', { conversationId, senderId, content });
@@ -451,7 +468,7 @@ export const api = {
   async getRefundRequests(): Promise<Order[]> {
     try {
       const res = await gasGet('getRefundRequests');
-      return res.orders || [];
+      return res.refundRequests || [];
     } catch (err) {
       console.error('getRefundRequests error:', err);
       return [];
@@ -559,6 +576,7 @@ export const api = {
       userId,
       availableBalance: 0,
       pendingBalance: 0,
+      reservedBalance: 0,
       totalEarnings: 0,
       totalWithdrawals: 0,
       updatedAt: new Date().toISOString()
@@ -599,7 +617,7 @@ export const api = {
     bankName: string;
     bankCode: string;
     accountNumber: string;
-    accountName: string;
+    accountName?: string;
   }): Promise<{ success: boolean; request?: WithdrawalRequest; error?: string }> {
     try {
       const res = await gasPost('requestWithdrawal', { userId, ...data });
@@ -616,6 +634,22 @@ export const api = {
     } catch (err) {
       console.error('getUserWithdrawals error:', err);
       return [];
+    }
+  },
+
+  // Cancel a withdrawal request the user owns, before payment processing starts.
+  // The backend validates ownership + status and releases the reserved funds exactly once.
+  async cancelWithdrawal(requestId: string, userId: string, reason?: string): Promise<{
+    success: boolean;
+    alreadyCancelled?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await gasPost('cancelWithdrawal', { requestId, userId, reason });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
   },
 
@@ -734,23 +768,42 @@ export const api = {
     }
   },
 
-  async processWithdrawal(requestId: string, decision: 'processed' | 'approved' | 'rejected', adminNotes: string = ''): Promise<{ success: boolean; error?: string }> {
+  // Admin approval. `method` selects the payment channel: 'paystack' (default) or
+  // 'manual_bank_transfer'. For a manual approval, `manualAction` must be either
+  // 'confirmed' (admin completed the bank transfer) or 'failed' (with `failureReason`).
+  async processWithdrawal(
+    requestId: string,
+    decision: 'processed' | 'approved' | 'rejected',
+    adminNotes: string = '',
+    adminId: string = '',
+    method: 'paystack' | 'manual_bank_transfer' = 'paystack',
+    manualAction?: 'confirmed' | 'failed',
+    failureReason?: string
+  ): Promise<{ success: boolean; error?: string; message?: string; status?: string }> {
     try {
-      const res = await gasPost('processWithdrawal', { requestId, decision, adminNotes });
+      const res = await gasPost('processWithdrawal', {
+        requestId,
+        decision,
+        adminNotes,
+        adminId,
+        method,
+        manualAction,
+        failureReason
+      });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   },
 
-  async bulkProcessWithdrawals(requestIds?: string[]): Promise<{
+  async bulkProcessWithdrawals(requestIds?: string[], adminId: string = ''): Promise<{
     success: boolean;
     summary?: BulkWithdrawalSummary;
     message?: string;
     error?: string;
   }> {
     try {
-      const res = await gasPost('bulkProcessWithdrawals', { requestIds });
+      const res = await gasPost('bulkProcessWithdrawals', { requestIds, adminId });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -838,6 +891,52 @@ export const api = {
   async removeProductAdmin(productId: string, adminId: string, reason?: string): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
       const res = await gasPost('removeProductAdmin', { productId, adminId, reason });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  // User Feedback (Guidelines & Safety page)
+  async submitFeedback(user: User, type: FeedbackType, subject: string, message: string): Promise<{ success: boolean; feedback?: Feedback; message?: string; error?: string }> {
+    try {
+      const res = await gasPost('submitFeedback', {
+        userId: user.userId,
+        userName: user.fullName,
+        userEmail: user.schoolEmail,
+        type,
+        subject,
+        message
+      });
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async getMyFeedback(userId: string): Promise<Feedback[]> {
+    try {
+      const res = await gasGet('getMyFeedback', { userId });
+      return res.feedback || [];
+    } catch (err) {
+      console.error('getMyFeedback error:', err);
+      return [];
+    }
+  },
+
+  async getAllFeedback(params: { type?: string; status?: string; timeframe?: string } = {}): Promise<Feedback[]> {
+    try {
+      const res = await gasGet('getAllFeedback', params);
+      return res.feedback || [];
+    } catch (err) {
+      console.error('getAllFeedback error:', err);
+      return [];
+    }
+  },
+
+  async updateFeedbackStatus(feedbackId: string, status: FeedbackStatus, adminNotes?: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const res = await gasPost('updateFeedbackStatus', { feedbackId, status, adminNotes });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };

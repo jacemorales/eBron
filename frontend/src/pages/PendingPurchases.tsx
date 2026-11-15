@@ -19,6 +19,8 @@ export const PendingPurchases: React.FC<{ onToast: (type: 'success' | 'error' | 
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+  // Target order for the "Confirm Receipt" warning modal.
+  const [receiptTarget, setReceiptTarget] = useState<Order | null>(null);
 
   // Cancellation modal state
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -43,6 +45,7 @@ export const PendingPurchases: React.FC<{ onToast: (type: 'success' | 'error' | 
       const res = await api.confirmOrder(orderId, 'buyer', user.userId);
       if (res.success) {
         onToast('success', res.message || 'Receipt confirmed!');
+        setReceiptTarget(null);
         await fetchOrders();
       } else {
         onToast('error', res.error || 'Failed to confirm receipt.');
@@ -140,18 +143,10 @@ export const PendingPurchases: React.FC<{ onToast: (type: 'success' | 'error' | 
                     <button
                       type="button"
                       disabled={confirmingOrderId === order.orderId}
-                      onClick={() => handleConfirm(order.orderId)}
+                      onClick={() => setReceiptTarget(order)}
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition-colors disabled:opacity-50"
                     >
-                      {confirmingOrderId === order.orderId ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" /> Confirming...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="w-4 h-4" /> Confirm I Received Item
-                        </>
-                      )}
+                      <CheckCircle2 className="w-4 h-4" /> Confirm I Received Item
                     </button>
                   )}
 
@@ -168,6 +163,63 @@ export const PendingPurchases: React.FC<{ onToast: (type: 'success' | 'error' | 
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Buyer Confirm Receipt Warning Modal */}
+      {receiptTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 relative">
+            <button
+              type="button"
+              onClick={() => { if (!confirmingOrderId) setReceiptTarget(null); }}
+              disabled={!!confirmingOrderId}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 disabled:opacity-50"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Confirm Receipt of Item</h3>
+                <p className="text-xs font-semibold text-slate-700 mt-1">
+                  {receiptTarget.productName} • ₦{Number(receiptTarget.amount).toLocaleString()}
+                </p>
+                <p className="text-sm text-slate-600 mt-3 leading-relaxed">
+                  Only confirm this order if you have physically received the item and are satisfied with its condition. Do not confirm if the item has not been delivered or if you have any unresolved issues with the product. Once confirmed, the seller's earnings may be released.
+                </p>
+              </div>
+              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setReceiptTarget(null)}
+                  disabled={!!confirmingOrderId}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 transition-colors disabled:opacity-50"
+                >
+                  Go Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleConfirm(receiptTarget.orderId)}
+                  disabled={!!confirmingOrderId}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {confirmingOrderId ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Confirming...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" /> Confirm Receipt
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

@@ -17,6 +17,36 @@ import { useAuth } from '../context/AuthContext';
 import { NotificationBell } from './NotificationBell';
 import { api } from '../services/api';
 
+const MobileSectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="text-[11px] font-black uppercase tracking-wider text-cu-gold px-3 pt-1 pb-0.5">{children}</div>
+);
+
+const ACCENT_CLASSES: Record<string, string> = {
+  emerald: 'text-emerald-300 font-bold',
+  purple: 'text-purple-300 font-bold',
+  gold: 'text-cu-gold font-bold',
+  amber: 'text-amber-300 font-bold'
+};
+
+const MobileNavLink: React.FC<{
+  to: string;
+  onClick: () => void;
+  badge?: number;
+  accent?: 'emerald' | 'purple' | 'gold' | 'amber';
+  children: React.ReactNode;
+}> = ({ to, onClick, badge, accent, children }) => (
+  <Link
+    to={to}
+    onClick={onClick}
+    className={`flex items-center justify-between py-2.5 px-3 rounded-xl text-slate-100 hover:bg-blue-900/50 transition-colors ${accent ? ACCENT_CLASSES[accent] : 'font-medium'}`}
+  >
+    <span>{children}</span>
+    {badge !== undefined && badge > 0 && (
+      <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">{badge}</span>
+    )}
+  </Link>
+);
+
 export const Navbar: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -27,27 +57,43 @@ export const Navbar: React.FC = () => {
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [pendingPurchases, setPendingPurchases] = useState(0);
+  const [pendingSales, setPendingSales] = useState(0);
 
   const buyRef = useRef<HTMLDivElement>(null);
   const sellRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
 
-  const fetchUnread = async () => {
-    if (user) {
-      try {
-        const counts = await api.getUnreadCounts(user.userId);
-        setUnreadMessages(counts.unreadMessages);
-      } catch (e) {
-        console.error(e);
-      }
+  const fetchCounts = async () => {
+    if (!user) {
+      setUnreadMessages(0);
+      setPendingPurchases(0);
+      setPendingSales(0);
+      return;
+    }
+    try {
+      const [unread, pending] = await Promise.all([
+        api.getUnreadCounts(user.userId),
+        api.getPendingCounts(user.userId)
+      ]);
+      setUnreadMessages(unread.unreadMessages);
+      setPendingPurchases(pending.pendingPurchases);
+      setPendingSales(pending.pendingSales);
+    } catch (e) {
+      console.error(e);
     }
   };
 
   useEffect(() => {
-    fetchUnread();
-    const interval = setInterval(fetchUnread, 10000);
+    fetchCounts();
+    const interval = setInterval(fetchCounts, 10000);
     return () => clearInterval(interval);
   }, [user]);
+
+  // Refresh the badges whenever the user navigates (e.g. after confirming an order).
+  useEffect(() => {
+    fetchCounts();
+  }, [location.pathname]);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -121,7 +167,14 @@ export const Navbar: React.FC = () => {
                         <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                       </Link>
                       <div className="border-t border-slate-100 my-1"></div>
-                      <Link to="/buy/pending" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Purchases</Link>
+                      <Link to="/buy/pending" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium flex items-center justify-between">
+                        <span>Pending Purchases</span>
+                        {pendingPurchases > 0 && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
+                            {pendingPurchases}
+                          </span>
+                        )}
+                      </Link>
                       <Link to="/buy/history" onClick={() => setBuyOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Purchase History</Link>
                     </div>
                   )}
@@ -143,7 +196,14 @@ export const Navbar: React.FC = () => {
                       <Link to="/sell/add" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-bold text-cu-blue">Add Item</Link>
                       <Link to="/sell/catalogue" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales Catalogue</Link>
                       <div className="border-t border-slate-100 my-1"></div>
-                      <Link to="/sell/pending" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Pending Sales</Link>
+                      <Link to="/sell/pending" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium flex items-center justify-between">
+                        <span>Pending Sales</span>
+                        {pendingSales > 0 && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
+                            {pendingSales}
+                          </span>
+                        )}
+                      </Link>
                       <Link to="/sell/history" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-medium">Sales History</Link>
                       <Link to="/sell/sales-balance" onClick={() => setSellOpen(false)} className="block px-4 py-2 text-sm hover:bg-slate-100 font-black text-purple-700">Sales Balance</Link>
                     </div>
@@ -241,48 +301,71 @@ export const Navbar: React.FC = () => {
 
       {/* Mobile Drawer */}
       {mobileOpen && (
-        <div className="md:hidden bg-cu-dark border-t border-blue-900/60 p-4 space-y-3 text-sm">
-          {user ? (
-            <div className="text-xs pb-2 border-b border-blue-900/40">
-              <div className="font-bold text-white text-sm">{user.fullName}</div>
-              <div className="text-cu-gold font-mono">{user.regNumber}</div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 pb-2 border-b border-blue-900/40">
-              <Link to="/login" onClick={() => setMobileOpen(false)} className="py-2 text-center bg-blue-900/60 rounded">Log In</Link>
-              <Link to="/register" onClick={() => setMobileOpen(false)} className="py-2 text-center bg-cu-gold text-cu-blue font-bold rounded">Register</Link>
-            </div>
-          )}
+        <div className="md:hidden bg-cu-dark border-t border-blue-900/60 max-h-[calc(100dvh-4rem)] overflow-y-auto overscroll-contain">
+          <div className="p-4 space-y-4 text-sm">
+            {user ? (
+              <div className="flex items-center gap-3 pb-3 border-b border-blue-900/40">
+                <div className="w-10 h-10 rounded-full bg-cu-gold text-cu-blue font-black flex items-center justify-center text-base flex-shrink-0">
+                  {user.fullName.charAt(0)}
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-white text-sm truncate">{user.fullName}</div>
+                  <div className="text-cu-gold font-mono text-xs">{user.regNumber}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 pb-3 border-b border-blue-900/40">
+                <Link to="/login" onClick={() => setMobileOpen(false)} className="py-2.5 text-center bg-blue-900/60 rounded-xl font-semibold">Log In</Link>
+                <Link to="/register" onClick={() => setMobileOpen(false)} className="py-2.5 text-center bg-cu-gold text-cu-blue font-bold rounded-xl">Register</Link>
+              </div>
+            )}
 
-          <Link to="/" onClick={() => setMobileOpen(false)} className="block py-1 hover:text-cu-gold">Browse Marketplace</Link>
-          <Link to="/guidelines" onClick={() => setMobileOpen(false)} className="block py-1 hover:text-cu-gold">Guidelines</Link>
+            {!user && (
+              <div className="space-y-1">
+                <MobileSectionLabel>Explore</MobileSectionLabel>
+                <MobileNavLink to="/" onClick={() => setMobileOpen(false)}>Browse Marketplace</MobileNavLink>
+                <MobileNavLink to="/guidelines" onClick={() => setMobileOpen(false)}>Guidelines & Safety</MobileNavLink>
+              </div>
+            )}
 
-          {/* Authenticated routes in mobile view */}
-          {user && (
-            <>
-              <div className="pt-2 border-t border-blue-900/40 text-[11px] font-bold uppercase text-cu-gold">Student Dashboard</div>
-              <Link to="/profile" onClick={() => setMobileOpen(false)} className="block py-1">My Account Profile</Link>
-              <Link to="/buy/saved" onClick={() => setMobileOpen(false)} className="block py-1">Saved Items</Link>
-              <Link to="/buy/wallets" onClick={() => setMobileOpen(false)} className="block py-1 text-emerald-400 font-bold">Wallets (Spending)</Link>
-              <Link to="/buy/pending" onClick={() => setMobileOpen(false)} className="block py-1">Pending Purchases</Link>
-              <Link to="/sell/add" onClick={() => setMobileOpen(false)} className="block py-1 text-cu-gold font-bold">Add Item for Sale</Link>
-              <Link to="/sell/catalogue" onClick={() => setMobileOpen(false)} className="block py-1">Sales Catalogue</Link>
-              <Link to="/sell/pending" onClick={() => setMobileOpen(false)} className="block py-1">Pending Sales</Link>
-              <Link to="/sell/sales-balance" onClick={() => setMobileOpen(false)} className="block py-1 text-purple-300 font-bold">Sales Balance</Link>
-              <Link to="/messages" onClick={() => setMobileOpen(false)} className="flex items-center justify-between py-1">
-                <span>Messages</span>
-                {unreadMessages > 0 && (
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white">
-                    {unreadMessages}
-                  </span>
-                )}
-              </Link>
-              {user.role === 'admin' && (
-                <Link to="/admin" onClick={() => setMobileOpen(false)} className="block py-1 text-amber-300 font-bold">Admin Portal</Link>
-              )}
-              <button type="button" onClick={handleLogout} className="block w-full text-left py-1 text-red-400 pt-2 border-t border-blue-900/40">Sign Out</button>
-            </>
-          )}
+            {user && (
+              <>
+                <div className="space-y-1">
+                  <MobileSectionLabel>Buy Products</MobileSectionLabel>
+                  <MobileNavLink to="/" onClick={() => setMobileOpen(false)}>Browse Marketplace</MobileNavLink>
+                  <MobileNavLink to="/buy/saved" onClick={() => setMobileOpen(false)}>Saved Items</MobileNavLink>
+                  <MobileNavLink to="/buy/wallets" onClick={() => setMobileOpen(false)} accent="emerald">Wallets (Spending)</MobileNavLink>
+                  <MobileNavLink to="/buy/pending" onClick={() => setMobileOpen(false)} badge={pendingPurchases}>Pending Purchases</MobileNavLink>
+                  <MobileNavLink to="/buy/history" onClick={() => setMobileOpen(false)}>Purchase History</MobileNavLink>
+                </div>
+
+                <div className="space-y-1">
+                  <MobileSectionLabel>Sell Products</MobileSectionLabel>
+                  <MobileNavLink to="/sell/add" onClick={() => setMobileOpen(false)} accent="gold">Add Item</MobileNavLink>
+                  <MobileNavLink to="/sell/catalogue" onClick={() => setMobileOpen(false)}>Sales Catalogue</MobileNavLink>
+                  <MobileNavLink to="/sell/pending" onClick={() => setMobileOpen(false)} badge={pendingSales}>Pending Sales</MobileNavLink>
+                  <MobileNavLink to="/sell/history" onClick={() => setMobileOpen(false)}>Sales History</MobileNavLink>
+                  <MobileNavLink to="/sell/sales-balance" onClick={() => setMobileOpen(false)} accent="purple">Sales Balance</MobileNavLink>
+                </div>
+
+                <div className="space-y-1">
+                  <MobileSectionLabel>Account</MobileSectionLabel>
+                  <MobileNavLink to="/messages" onClick={() => setMobileOpen(false)} badge={unreadMessages}>Messages</MobileNavLink>
+                  <MobileNavLink to="/profile" onClick={() => setMobileOpen(false)}>My Profile & Delivery</MobileNavLink>
+                  <MobileNavLink to="/guidelines" onClick={() => setMobileOpen(false)}>Guidelines & Safety</MobileNavLink>
+                  {user.role === 'admin' && (
+                    <MobileNavLink to="/admin" onClick={() => setMobileOpen(false)} accent="amber">Admin Portal</MobileNavLink>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-blue-900/40">
+                  <button type="button" onClick={handleLogout} className="w-full text-left py-2.5 px-3 rounded-xl text-red-300 hover:bg-red-500/10 font-semibold flex items-center gap-2">
+                    <LogOut className="w-4 h-4" /> Sign Out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </header>

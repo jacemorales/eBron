@@ -6,6 +6,11 @@ export default {
   ],
   theme: {
     extend: {
+      screens: {
+        // eBron mobile/tablet breakpoint: the mobile & tablet layout is activated
+        // below ~950px and the full desktop layout above it.
+        md: '950px'
+      },
       colors: {
         cu: {
           blue: '#0B2545',

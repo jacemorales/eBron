@@ -29,8 +29,8 @@ export const SalesHistory: React.FC<{ onToast: (type: 'success' | 'error' | 'inf
       ) : orders.length === 0 ? (
         <EmptyState title="No completed sales" description="Completed sales with released payouts will show here." />
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-          <table className="w-full text-left text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-xs">
             <thead className="bg-slate-50 font-bold uppercase tracking-wider text-slate-600 border-b">
               <tr>
                 <th className="p-3">Product</th>

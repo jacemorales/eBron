@@ -179,7 +179,7 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
           {['1000', '2000', '5000', '10000'].map(val => (
             <button
               type="button"

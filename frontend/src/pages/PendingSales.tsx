@@ -18,6 +18,8 @@ export const PendingSales: React.FC<{ onToast: (type: 'success' | 'error' | 'inf
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+  // Target order for the "Confirm Handover" warning modal.
+  const [handoverTarget, setHandoverTarget] = useState<Order | null>(null);
 
   // Cancellation modal state
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -42,6 +44,7 @@ export const PendingSales: React.FC<{ onToast: (type: 'success' | 'error' | 'inf
       const res = await api.confirmOrder(id, 'seller', user.userId);
       if (res.success) {
         onToast('success', res.message || 'Handover confirmed!');
+        setHandoverTarget(null);
         await fetchSales();
       } else {
         onToast('error', res.error || 'Failed to confirm handover.');
@@ -139,18 +142,10 @@ export const PendingSales: React.FC<{ onToast: (type: 'success' | 'error' | 'inf
                     <button
                       type="button"
                       disabled={confirmingOrderId === order.orderId}
-                      onClick={() => handleHandover(order.orderId)}
+                      onClick={() => setHandoverTarget(order)}
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition-colors disabled:opacity-50"
                     >
-                      {confirmingOrderId === order.orderId ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" /> Confirming...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="w-4 h-4" /> Confirm Handover to Buyer
-                        </>
-                      )}
+                      <CheckCircle2 className="w-4 h-4" /> Confirm Handover to Buyer
                     </button>
                   )}
 
@@ -167,6 +162,81 @@ export const PendingSales: React.FC<{ onToast: (type: 'success' | 'error' | 'inf
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Seller Confirm Handover Warning Modal */}
+      {handoverTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 relative">
+            <button
+              type="button"
+              onClick={() => { if (!confirmingOrderId) setHandoverTarget(null); }}
+              disabled={!!confirmingOrderId}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 disabled:opacity-50"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Confirm Handover to Buyer</h3>
+                <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                  Before confirming, ensure that you have physically handed over this item to the buyer.
+                </p>
+
+                <div className="mt-3 space-y-2 bg-slate-50 border border-slate-100 rounded-xl p-3.5 text-xs">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 font-semibold">Buyer</span>
+                    <span className="text-slate-900 font-bold text-right">{handoverTarget.deliveryFullName || handoverTarget.buyerName || '—'}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 font-semibold">Delivery Location</span>
+                    <span className="text-slate-900 font-bold text-right">
+                      {handoverTarget.deliveryHall ? `${handoverTarget.deliveryHall} Hall, Room ${handoverTarget.deliveryRoom || '—'}` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 font-semibold">Item</span>
+                    <span className="text-slate-900 font-bold text-right">{handoverTarget.productName} • ₦{Number(handoverTarget.amount).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <p className="text-sm text-slate-600 mt-3 leading-relaxed">
+                  Do not confirm this order until you have actually delivered the item to this buyer. Confirming prematurely may release funds before the transaction is properly completed.
+                </p>
+              </div>
+              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setHandoverTarget(null)}
+                  disabled={!!confirmingOrderId}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 transition-colors disabled:opacity-50"
+                >
+                  Go Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleHandover(handoverTarget.orderId)}
+                  disabled={!!confirmingOrderId}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {confirmingOrderId ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Confirming...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" /> Confirm Handover
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

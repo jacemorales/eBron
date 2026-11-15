@@ -128,6 +128,7 @@ var SHEETS_SCHEMA = {
     'userId',
     'availableBalance', // Confirmed sales income available for withdrawal
     'pendingBalance', // Sales income pending dual confirmation
+    'reservedBalance', // Funds reserved by pending withdrawal requests (not yet paid out)
     'totalEarnings',
     'totalWithdrawals',
     'updatedAt'
@@ -168,20 +169,29 @@ var SHEETS_SCHEMA = {
     'requestId',
     'userId',
     'userName',
+    'userRegNumber',
     'userEmail',
     'amount',
     'bankName',
     'bankCode',
     'accountNumber',
     'accountName',
-    'status', // 'pending' | 'processing' | 'successful' | 'failed' | 'rejected' | 'processed'
+    'status', // 'pending' | 'processing' | 'successful' | 'failed' | 'rejected' | 'reversed' | 'cancelled'
     'reference',
     'paystackRecipientCode',
     'paystackTransferCode',
     'paystackStatus',
+    'paymentMethod', // '' (undecided) | 'paystack' | 'manual_bank_transfer'
+    'adminId', // Admin approval ID
+    'manualConfirmedBy', // Admin who confirmed a manual bank transfer completed
+    'manualConfirmedAt', // Timestamp of that manual confirmation
+    'rejectionReason', // Reason provided when an admin rejects the request
+    'failureReason', // Reason a (manual or Paystack) transfer failed
     'adminNotes',
-    'processedAt',
-    'createdAt'
+    'processedAt', // Admin decision date
+    'completedAt', // Completion timestamp (successful payout)
+    'createdAt', // Request timestamp
+    'updatedAt'
   ],
   Appeals: [
     'appealId',

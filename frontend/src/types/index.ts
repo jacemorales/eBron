@@ -197,6 +197,7 @@ export interface SellerBalance {
   userId: string;
   availableBalance: number;
   pendingBalance: number;
+  reservedBalance: number;
   totalEarnings: number;
   totalWithdrawals: number;
   updatedAt: string;
@@ -218,15 +219,21 @@ export type WithdrawalStatus =
   | 'processing'
   | 'successful'
   | 'failed'
+  | 'reversed'
   | 'approved'
   | 'rejected'
+  | 'cancelled'
   | 'processed';
+
+// Payment method chosen by an administrator when approving a withdrawal.
+export type WithdrawalPaymentMethod = '' | 'paystack' | 'manual_bank_transfer';
 
 export interface WithdrawalRequest {
   requestId: string;
   userId: string;
   userEmail?: string;
   userName?: string;
+  userRegNumber?: string;
   amount: number;
   bankName: string;
   bankCode?: string;
@@ -237,9 +244,24 @@ export interface WithdrawalRequest {
   paystackRecipientCode?: string;
   paystackTransferCode?: string;
   paystackStatus?: string;
+  paymentMethod?: WithdrawalPaymentMethod;
+  adminId?: string;
+  // Administrator who explicitly confirmed a manual bank transfer was completed.
+  manualConfirmedBy?: string;
+  manualConfirmedAt?: string;
+  rejectionReason?: string;
+  failureReason?: string;
   adminNotes: string;
   processedAt: string | null;
+  completedAt?: string | null;
   createdAt: string;
+  updatedAt?: string;
+}
+
+// Live per-user counters surfaced in the navigation dropdown.
+export interface PendingCounts {
+  pendingPurchases: number;
+  pendingSales: number;
 }
 
 export interface Bank {
@@ -317,5 +339,28 @@ export interface BulkWithdrawalSummary {
     error?: string;
     reason?: string;
   }>;
+}
+
+// User Feedback (Guidelines & Safety page)
+export type FeedbackType =
+  | 'Issue/Problem'
+  | 'Suggestion'
+  | 'Positive Feedback'
+  | 'General Feedback';
+
+export type FeedbackStatus = 'New' | 'Under Review' | 'Resolved';
+
+export interface Feedback {
+  feedbackId: string;
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  type: FeedbackType;
+  subject: string;
+  message: string;
+  status: FeedbackStatus;
+  adminNotes: string;
+  createdAt: string;
+  updatedAt: string;
 }
 

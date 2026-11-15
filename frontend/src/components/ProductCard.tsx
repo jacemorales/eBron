@@ -6,6 +6,7 @@ import { ActionMenu } from './ActionMenu';
 import type { ActionMenuItem } from './ActionMenu';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { getProductStock, isProductSoldOut } from '../utils/productUtils';
 
 export const ProductCard: React.FC<{
   product: Product;
@@ -95,14 +96,24 @@ export const ProductCard: React.FC<{
           </div>
 
           {(() => {
-            const avail = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
-            const isSold = avail <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+            const avail = getProductStock(product);
+            const isSold = isProductSoldOut(product);
+            const isReserved = product.availability === 'reserved';
 
             if (isSold) {
               return (
                 <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center">
                   <span className="bg-rose-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full shadow">
                     Sold Out
+                  </span>
+                </div>
+              );
+            }
+            if (isReserved) {
+              return (
+                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center">
+                  <span className="bg-amber-600 text-white font-black text-xs uppercase px-3 py-1 rounded-full shadow">
+                    Reserved
                   </span>
                 </div>
               );

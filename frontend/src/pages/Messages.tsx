@@ -85,9 +85,9 @@ export const Messages: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
-      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden flex flex-col md:flex-row h-[650px] shadow-sm">
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden flex flex-col md:flex-row h-[calc(100dvh-9rem)] min-h-[540px] shadow-sm">
         {/* Sidebar */}
-        <div className="w-full md:w-80 border-r border-slate-200 flex flex-col bg-slate-50">
+        <div className="w-full md:w-80 max-h-[42vh] md:max-h-none min-h-0 border-b md:border-b-0 md:border-r border-slate-200 flex flex-col bg-slate-50">
           <div className="p-4 border-b bg-white font-bold text-sm flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-cu-blue" />
@@ -190,7 +190,7 @@ export const Messages: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
                     return (
                       <div key={m.messageId} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
                         <div
-                          className={`p-3 rounded-2xl text-xs max-w-sm shadow-sm ${
+                          className={`p-3 rounded-2xl text-xs max-w-[80%] sm:max-w-sm shadow-sm ${
                             mine
                               ? 'bg-cu-blue text-white rounded-br-none'
                               : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none'

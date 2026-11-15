@@ -47,12 +47,14 @@ import type {
   AccountAppeal,
   FinancialTransaction,
   BulkWithdrawalSummary,
-  StatusHistoryItem
+  StatusHistoryItem,
+  Feedback,
+  FeedbackStatus
 } from '../types';
 
 export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'info', msg: string) => void }> = ({ onToast }) => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'analytics' | 'reports' | 'products' | 'deleted' | 'users' | 'withdrawals' | 'transactions'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'reports' | 'products' | 'deleted' | 'users' | 'withdrawals' | 'transactions' | 'feedback'>('analytics');
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly' | 'monthly' | 'all'>('all');
   const [analytics, setAnalytics] = useState<any>(null);
 
@@ -77,6 +79,14 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkSummary, setBulkSummary] = useState<BulkWithdrawalSummary | null>(null);
   const [processingWithdrawalId, setProcessingWithdrawalId] = useState<string | null>(null);
+  const [withdrawalFilterStatus, setWithdrawalFilterStatus] = useState('all');
+  const [withdrawalSearch, setWithdrawalSearch] = useState('');
+
+  // Withdrawal approval — payment method selection modal state.
+  const [approvalTarget, setApprovalTarget] = useState<WithdrawalRequest | null>(null);
+  const [approvalStep, setApprovalStep] = useState<'method' | 'manual' | 'manual_confirm' | 'manual_failed' | null>(null);
+  const [manualFailureReason, setManualFailureReason] = useState('');
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const [txView, setTxView] = useState<'wallet' | 'sales' | 'refunds' | 'ledger' | 'reconciliation'>('wallet');
   const [reportFilterCat, setReportFilterCat] = useState('All');
@@ -95,10 +105,20 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const [refundNotes, setRefundNotes] = useState('');
   const [refundActionLoading, setRefundActionLoading] = useState(false);
 
+  // User Feedback State
+  const [feedbackList, setFeedbackList] = useState<Feedback[]>([]);
+  const [feedbackFilterType, setFeedbackFilterType] = useState('All');
+  const [feedbackFilterStatus, setFeedbackFilterStatus] = useState('All');
+  const [feedbackFilterDate, setFeedbackFilterDate] = useState<'all' | 'today' | '7d' | '30d'>('all');
+  const [feedbackSearch, setFeedbackSearch] = useState('');
+  const [selectedFeedback, setSelectedFeedback] = useState<Feedback | null>(null);
+  const [feedbackNotesDraft, setFeedbackNotesDraft] = useState('');
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
+
   const refreshData = async () => {
     setLoading(true);
     try {
-      const [stats, allProds, users, wds, allReps, wTxs, sTxs, rRequests, allAppeals, ledger, recons] = await Promise.all([
+      const [stats, allProds, users, wds, allReps, wTxs, sTxs, rRequests, allAppeals, ledger, recons, fbList] = await Promise.all([
         api.getAdminAnalytics(timeframe),
         api.getProducts({ includeDeleted: true }),
         api.getAllUsers(),
@@ -109,7 +129,8 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
         api.getRefundRequests(),
         api.getAppeals(),
         api.getTransactionsLedger().catch(() => []),
-        api.getReconciliations().catch(() => [])
+        api.getReconciliations().catch(() => []),
+        api.getAllFeedback().catch(() => [])
       ]);
       setAnalytics(stats);
       setProducts(allProds.filter(p => p.status !== 'deleted'));
@@ -123,6 +144,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
       setAppeals(allAppeals);
       setTransactionsLedger(ledger);
       setReconciliations(recons);
+      setFeedbackList(fbList);
     } catch (e) {
       console.error(e);
       onToast('error', 'Failed to load platform records.');
@@ -252,18 +274,160 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
     }
   };
 
+  const handleOpenFeedback = (fb: Feedback) => {
+    setSelectedFeedback(fb);
+    setFeedbackNotesDraft(fb.adminNotes || '');
+  };
+
+  const handleUpdateFeedbackStatus = async (feedbackId: string, status: FeedbackStatus, adminNotes?: string) => {
+    const res = await api.updateFeedbackStatus(feedbackId, status, adminNotes);
+    if (res.success) {
+      onToast('success', `Feedback marked as ${status}.`);
+      setFeedbackList(prev => prev.map(f => f.feedbackId === feedbackId
+        ? { ...f, status, adminNotes: adminNotes !== undefined ? adminNotes : f.adminNotes }
+        : f));
+      if (selectedFeedback && selectedFeedback.feedbackId === feedbackId) {
+        setSelectedFeedback({ ...selectedFeedback, status, adminNotes: adminNotes !== undefined ? adminNotes : selectedFeedback.adminNotes });
+      }
+      refreshData();
+    } else {
+      onToast('error', res.error || 'Failed to update feedback.');
+    }
+  };
+
+  const handleSaveFeedbackNotes = async () => {
+    if (!selectedFeedback) return;
+    setFeedbackSaving(true);
+    try {
+      const res = await api.updateFeedbackStatus(selectedFeedback.feedbackId, selectedFeedback.status, feedbackNotesDraft);
+      if (res.success) {
+        onToast('success', 'Administrator notes saved.');
+        setSelectedFeedback({ ...selectedFeedback, adminNotes: feedbackNotesDraft });
+        refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to save notes.');
+      }
+    } finally {
+      setFeedbackSaving(false);
+    }
+  };
+
+  const openApprovalModal = (w: WithdrawalRequest) => {
+    setApprovalTarget(w);
+    setApprovalStep('method');
+    setManualFailureReason('');
+  };
+
+  const closeApprovalModal = () => {
+    setApprovalTarget(null);
+    setApprovalStep(null);
+    setManualFailureReason('');
+  };
+
+  // Execute a Paystack transfer for the selected request (existing secure integration).
+  const runPaystackApproval = async () => {
+    if (!approvalTarget || approvalBusy) return;
+    const target = approvalTarget;
+    const confirmApprove = window.confirm(
+      `Approve and pay out via Paystack Transfer?\n\n` +
+      `Request: ${target.reference || target.requestId}\n` +
+      `Amount: ₦${Number(target.amount || 0).toLocaleString()}\n` +
+      `Bank: ${target.bankName || ''} (${target.accountNumber || ''})\n\n` +
+      `This initiates a real Paystack transfer and cannot be undone.`
+    );
+    if (!confirmApprove) return;
+    setApprovalBusy(true);
+    try {
+      const res = await api.processWithdrawal(target.requestId, 'approved', '', user?.userId || '', 'paystack');
+      if (res.success) {
+        onToast('success', res.message || 'Paystack transfer initiated successfully!');
+        closeApprovalModal();
+        await refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to process Paystack withdrawal.');
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error processing Paystack withdrawal.');
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
+  // Admin explicitly confirms a manual bank transfer was actually completed.
+  const runManualConfirm = async () => {
+    if (!approvalTarget || approvalBusy) return;
+    setApprovalBusy(true);
+    try {
+      const res = await api.processWithdrawal(
+        approvalTarget.requestId,
+        'approved',
+        'Manual bank transfer completed by administrator.',
+        user?.userId || '',
+        'manual_bank_transfer',
+        'confirmed'
+      );
+      if (res.success) {
+        onToast('success', res.message || 'Manual bank transfer recorded. Withdrawal marked successful.');
+        closeApprovalModal();
+        await refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to record manual transfer.');
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error recording manual transfer.');
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
+  // Admin reports that the manual transfer failed (a reason is mandatory).
+  const runManualFailure = async () => {
+    if (!approvalTarget || approvalBusy) return;
+    const reason = manualFailureReason.trim();
+    if (!reason) {
+      onToast('error', 'Please explain why the manual transfer failed.');
+      return;
+    }
+    setApprovalBusy(true);
+    try {
+      const res = await api.processWithdrawal(
+        approvalTarget.requestId,
+        'approved',
+        '',
+        user?.userId || '',
+        'manual_bank_transfer',
+        'failed',
+        reason
+      );
+      if (res.success) {
+        onToast('success', res.message || 'Manual transfer marked as failed and reserved funds released.');
+        closeApprovalModal();
+        await refreshData();
+      } else {
+        onToast('error', res.error || 'Failed to mark transfer as failed.');
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Error recording manual failure.');
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
   const handleProcessWithdrawal = async (requestId: string, decision: 'approved' | 'rejected') => {
     if (processingWithdrawalId || bulkProcessing) return;
-    const promptMsg = decision === 'approved' 
-      ? 'Enter optional administrator notes for executing this Paystack payout:'
-      : 'Enter reason/explanation for rejecting this withdrawal:';
-    const notes = prompt(promptMsg);
-    if (decision === 'rejected' && notes === null) return;
+    // Approvals now route through the payment-method selection modal.
+    if (decision === 'approved') {
+      const target = withdrawals.find(w => w.requestId === requestId);
+      if (target) openApprovalModal(target);
+      return;
+    }
+    const notes = prompt('Enter reason/explanation for rejecting this withdrawal:');
+    if (notes === null) return;
     setProcessingWithdrawalId(requestId);
     try {
-      const res = await api.processWithdrawal(requestId, decision, notes || '');
+      const res = await api.processWithdrawal(requestId, decision, notes || '', user?.userId || '');
       if (res.success) {
-        onToast('success', decision === 'approved' ? 'Paystack transfer initiated successfully!' : 'Withdrawal request rejected.');
+        onToast('success', 'Withdrawal request rejected.');
         await refreshData();
       } else {
         onToast('error', res.error || `Failed to process withdrawal.`);
@@ -279,7 +443,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
     if (bulkProcessing) return;
     setBulkProcessing(true);
     try {
-      const res = await api.bulkProcessWithdrawals();
+      const res = await api.bulkProcessWithdrawals(undefined, user?.userId || '');
       if (res.success && res.summary) {
         setBulkSummary(res.summary);
         onToast('success', res.message || `Bulk payout completed: ${res.summary.successful} approved, ${res.summary.failed} failed.`);
@@ -315,6 +479,34 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   };
 
   const userNameById = (id: string) => usersList.find(u => u.userId === id)?.fullName || id;
+
+  const withdrawalStatusLabel = (status: string): string => {
+    const map: Record<string, string> = {
+      pending: 'Pending Approval',
+      processing: 'Processing',
+      successful: 'Successful',
+      processed: 'Successful',
+      approved: 'Approved',
+      rejected: 'Rejected',
+      failed: 'Failed',
+      reversed: 'Reversed',
+      cancelled: 'Cancelled'
+    };
+    return map[status] || status;
+  };
+
+  const filteredWithdrawals = withdrawals.filter(w => {
+    const statusOk = withdrawalFilterStatus === 'all'
+      || w.status === withdrawalFilterStatus
+      || (withdrawalFilterStatus === 'pending' && w.status === 'pending');
+    const q = withdrawalSearch.trim().toLowerCase();
+    const searchOk = !q
+      || String(w.userName || '').toLowerCase().includes(q)
+      || String(w.userRegNumber || '').toLowerCase().includes(q)
+      || String(w.reference || '').toLowerCase().includes(q)
+      || String(w.requestId || '').toLowerCase().includes(q);
+    return statusOk && searchOk;
+  });
 
   if (loading || !analytics) {
     return <div className="text-center py-20 text-slate-400">Loading administrator console...</div>;
@@ -420,6 +612,13 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
           className={`pb-3 flex items-center gap-1.5 transition ${activeTab === 'transactions' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
         >
           <CreditCard className="w-4 h-4" /> Transactions ({walletTransactions.length + salesTransactions.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('feedback')}
+          className={`pb-3 flex items-center gap-1.5 transition whitespace-nowrap ${activeTab === 'feedback' ? 'text-cu-blue border-b-2 border-cu-blue' : 'text-slate-500 hover:text-slate-800'}`}
+        >
+          <MessageSquare className="w-4 h-4 text-cu-gold" /> User Feedback ({feedbackList.filter(f => f.status === 'New').length} New)
         </button>
       </div>
 
@@ -800,8 +999,8 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
 
             {/* Reports Table */}
-            <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-              <table className="w-full text-left text-xs">
+            <div className="bg-white rounded-3xl border border-slate-200 overflow-x-auto shadow-sm">
+              <table className="w-full min-w-[900px] text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                   <tr>
                     <th className="p-3">Report ID</th>
@@ -925,8 +1124,8 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
       {/* TAB 2: ACTIVE PRODUCTS (Soft Delete Action) */}
       {activeTab === 'products' && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-          <table className="w-full text-left text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto shadow-sm">
+          <table className="w-full min-w-[720px] text-left text-xs">
             <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
               <tr>
                 <th className="p-3">Product</th>
@@ -972,8 +1171,8 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
       {/* TAB 3: DELETED PRODUCTS (Restoration) */}
       {activeTab === 'deleted' && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-          <table className="w-full text-left text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto shadow-sm">
+          <table className="w-full min-w-[640px] text-left text-xs">
             <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
               <tr>
                 <th className="p-3">Product</th>
@@ -1015,8 +1214,8 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
       {/* TAB 4: USERS MANAGEMENT */}
       {activeTab === 'users' && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-          <table className="w-full text-left text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto shadow-sm">
+          <table className="w-full min-w-[820px] text-left text-xs">
             <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
               <tr>
                 <th className="p-3">Student Name</th>
@@ -1111,26 +1310,66 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
           </div>
 
+          {/* Filters & Search */}
+          <div className="bg-white p-3 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <select
+                  value={withdrawalFilterStatus}
+                  onChange={(e) => setWithdrawalFilterStatus(e.target.value)}
+                  className="border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-cu-blue"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="pending">Pending Approval</option>
+                  <option value="processing">Processing</option>
+                  <option value="successful">Successful</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="failed">Failed</option>
+                  <option value="reversed">Reversed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+              <span className="text-[11px] font-bold text-slate-500">
+                Showing {filteredWithdrawals.length} of {withdrawals.length}
+              </span>
+            </div>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={withdrawalSearch}
+                onChange={(e) => setWithdrawalSearch(e.target.value)}
+                placeholder="Search user, name, reference or request ID"
+                className="border border-slate-300 rounded-xl pl-8 pr-3 py-1.5 text-xs font-medium text-slate-700 w-full sm:w-72 focus:outline-none focus:ring-2 focus:ring-cu-blue"
+              />
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[900px] text-left text-xs">
               <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                 <tr>
+                  <th className="p-3">Request ID</th>
                   <th className="p-3">Student</th>
                   <th className="p-3">Amount</th>
                   <th className="p-3">Bank Details</th>
+                  <th className="p-3">Submitted</th>
                   <th className="p-3">Reference</th>
-                  <th className="p-3">Transfer Status</th>
+                  <th className="p-3">Status</th>
                   <th className="p-3">Process</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
-                {withdrawals.length === 0 ? (
-                  <tr><td colSpan={6} className="p-6 text-center text-slate-400">No withdrawal requests recorded.</td></tr>
+                {filteredWithdrawals.length === 0 ? (
+                  <tr><td colSpan={8} className="p-6 text-center text-slate-400">No withdrawal requests match the current filters.</td></tr>
                 ) : (
-                  withdrawals.map(w => (
+                  filteredWithdrawals.map(w => (
                     <tr key={w.requestId}>
+                      <td className="p-3 font-mono text-[11px] text-slate-600">{w.requestId}</td>
                       <td className="p-3">
                         <div className="font-bold text-slate-900">{w.userName}</div>
+                        <div className="text-[10px] text-slate-500">{w.userRegNumber || '—'}</div>
                         <div className="text-[10px] text-slate-400">{w.userEmail}</div>
                       </td>
                       <td className="p-3 font-bold text-slate-900">₦{Number(w.amount).toLocaleString()}</td>
@@ -1139,18 +1378,44 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                         <div className="font-mono text-slate-600">{w.accountNumber}</div>
                         <div className="text-[10px] text-slate-500 font-bold">{w.accountName}</div>
                       </td>
-                      <td className="p-3 font-mono text-[11px] text-slate-500">{w.reference || w.requestId}</td>
+                      <td className="p-3 text-[11px] text-slate-500">
+                        <div>{new Date(w.createdAt || '').toLocaleString() || '—'}</div>
+                        {w.completedAt && (
+                          <div className="text-[10px] text-emerald-600 font-bold">Done: {new Date(w.completedAt).toLocaleString()}</div>
+                        )}
+                      </td>
+                      <td className="p-3 font-mono text-[11px] text-slate-500">{w.reference || '—'}</td>
                       <td className="p-3">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                           w.status === 'processed' || w.status === 'successful' ? 'bg-emerald-100 text-emerald-800' :
                           w.status === 'rejected' ? 'bg-red-100 text-red-800' :
                           w.status === 'failed' ? 'bg-rose-100 text-rose-800' :
+                          w.status === 'reversed' ? 'bg-purple-100 text-purple-800' :
+                          w.status === 'cancelled' ? 'bg-slate-200 text-slate-700' :
                           w.status === 'processing' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
                         }`}>
-                          {w.status}
+                          {withdrawalStatusLabel(w.status)}
                         </span>
+                        {w.paymentMethod && (
+                          <div className="mt-0.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              w.paymentMethod === 'manual_bank_transfer' ? 'bg-indigo-100 text-indigo-800' : 'bg-sky-100 text-sky-800'
+                            }`}>
+                              {w.paymentMethod === 'manual_bank_transfer' ? 'Manual Transfer' : 'Paystack'}
+                            </span>
+                          </div>
+                        )}
                         {w.paystackTransferCode && (
                           <div className="text-[9px] font-mono text-slate-400 mt-0.5">Code: {w.paystackTransferCode}</div>
+                        )}
+                        {w.manualConfirmedBy && (
+                          <div className="text-[9px] text-indigo-600 mt-0.5">Confirmed by: {userNameById(w.manualConfirmedBy)}</div>
+                        )}
+                        {w.status === 'rejected' && w.rejectionReason && (
+                          <div className="text-[10px] text-red-500 mt-0.5">Reason: {w.rejectionReason}</div>
+                        )}
+                        {(w.status === 'failed' || w.status === 'cancelled') && w.failureReason && (
+                          <div className="text-[10px] text-rose-500 mt-0.5">Reason: {w.failureReason}</div>
                         )}
                       </td>
                       <td className="p-3">
@@ -1168,7 +1433,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                                 </>
                               ) : (
                                 <>
-                                  <CheckCircle className="w-3 h-3" /> Approve & Payout (Paystack)
+                                  <CheckCircle className="w-3 h-3" /> Approve
                                 </>
                               )}
                             </button>
@@ -1181,6 +1446,11 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                               <XCircle className="w-3 h-3" /> Reject
                             </button>
                           </div>
+                        )}
+                        {w.status === 'processing' && (
+                          <span className="text-[11px] text-blue-700 font-bold flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin" /> In progress
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -1240,7 +1510,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
           {txView === 'refunds' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[760px] text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                   <tr>
                     <th className="p-3">Order Ref & Product</th>
@@ -1321,7 +1591,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
           ) : txView === 'wallet' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[820px] text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                   <tr>
                     <th className="p-3">Transaction ID</th>
@@ -1365,7 +1635,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
           ) : txView === 'sales' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[820px] text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                   <tr>
                     <th className="p-3">Transaction ID</th>
@@ -1412,7 +1682,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
             </div>
           ) : txView === 'ledger' ? (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[860px] text-left text-xs">
                 <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                   <tr>
                     <th className="p-3">Reference / TxID</th>
@@ -1502,7 +1772,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[760px] text-left text-xs">
                   <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
                     <tr>
                       <th className="p-3">Reference</th>
@@ -1568,6 +1838,281 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* TAB 7: USER FEEDBACK MANAGEMENT */}
+      {activeTab === 'feedback' && (() => {
+        const totalFeedback = feedbackList.length;
+        const newCount = feedbackList.filter(f => f.status === 'New').length;
+        const reviewCount = feedbackList.filter(f => f.status === 'Under Review').length;
+        const resolvedCount = feedbackList.filter(f => f.status === 'Resolved').length;
+
+        const now = Date.now();
+        const dateCutoff = feedbackFilterDate === 'today' ? now - 24 * 60 * 60 * 1000
+          : feedbackFilterDate === '7d' ? now - 7 * 24 * 60 * 60 * 1000
+          : feedbackFilterDate === '30d' ? now - 30 * 24 * 60 * 60 * 1000
+          : 0;
+
+        const filtered = feedbackList.filter(f => {
+          if (feedbackFilterType !== 'All' && f.type !== feedbackFilterType) return false;
+          if (feedbackFilterStatus !== 'All' && f.status !== feedbackFilterStatus) return false;
+          if (dateCutoff && new Date(f.createdAt).getTime() < dateCutoff) return false;
+          if (feedbackSearch.trim()) {
+            const q = feedbackSearch.toLowerCase();
+            const hay = `${f.feedbackId} ${f.userName} ${f.userEmail || ''} ${f.subject} ${f.message}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        });
+
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Feedback</span>
+                <div className="text-2xl font-black text-slate-900 mt-1">{totalFeedback}</div>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-amber-800 uppercase">New</span>
+                <div className="text-2xl font-black text-amber-900 mt-1">{newCount}</div>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-blue-800 uppercase">Under Review</span>
+                <div className="text-2xl font-black text-blue-900 mt-1">{reviewCount}</div>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase">Resolved</span>
+                <div className="text-2xl font-black text-emerald-900 mt-1">{resolvedCount}</div>
+              </div>
+            </div>
+
+            {/* Filter Controls */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                <Search className="w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={feedbackSearch}
+                  onChange={e => setFeedbackSearch(e.target.value)}
+                  placeholder="Search by user, subject, message, or feedback ID..."
+                  className="w-full px-3 py-1.5 border rounded-xl text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={feedbackFilterType}
+                  onChange={e => setFeedbackFilterType(e.target.value)}
+                  className="px-3 py-1.5 border rounded-xl bg-white text-xs"
+                >
+                  <option value="All">All Types</option>
+                  <option value="Issue/Problem">Issue/Problem</option>
+                  <option value="Suggestion">Suggestion</option>
+                  <option value="Positive Feedback">Positive Feedback</option>
+                  <option value="General Feedback">General Feedback</option>
+                </select>
+                <select
+                  value={feedbackFilterStatus}
+                  onChange={e => setFeedbackFilterStatus(e.target.value)}
+                  className="px-3 py-1.5 border rounded-xl bg-white text-xs"
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="New">New</option>
+                  <option value="Under Review">Under Review</option>
+                  <option value="Resolved">Resolved</option>
+                </select>
+                <select
+                  value={feedbackFilterDate}
+                  onChange={e => setFeedbackFilterDate(e.target.value as any)}
+                  className="px-3 py-1.5 border rounded-xl bg-white text-xs"
+                >
+                  <option value="all">All Time</option>
+                  <option value="today">Last 24 Hours</option>
+                  <option value="7d">Last 7 Days</option>
+                  <option value="30d">Last 30 Days</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm overflow-x-auto">
+              <table className="w-full min-w-[820px] text-left text-xs">
+                <thead className="bg-slate-50 font-bold uppercase text-slate-600 border-b">
+                  <tr>
+                    <th className="p-3">Feedback ID</th>
+                    <th className="p-3">User</th>
+                    <th className="p-3">Category</th>
+                    <th className="p-3">Subject</th>
+                    <th className="p-3">Message</th>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {filtered.length === 0 ? (
+                    <tr><td colSpan={8} className="p-8 text-center text-slate-400">No feedback matches the selected filters.</td></tr>
+                  ) : (
+                    filtered.map(f => (
+                      <tr key={f.feedbackId} className="hover:bg-slate-50/70 transition">
+                        <td className="p-3 font-mono text-[11px] text-slate-500">{f.feedbackId}</td>
+                        <td className="p-3">
+                          <div className="font-bold text-slate-900">{f.userName || f.userId}</div>
+                          <div className="text-[10px] text-slate-400">{f.userEmail || f.userId}</div>
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${
+                            f.type === 'Issue/Problem' ? 'bg-red-50 text-red-700 border border-red-200' :
+                            f.type === 'Suggestion' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                            f.type === 'Positive Feedback' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                            'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}>
+                            {f.type}
+                          </span>
+                        </td>
+                        <td className="p-3 font-bold text-slate-800 max-w-[160px] truncate" title={f.subject}>{f.subject}</td>
+                        <td className="p-3 max-w-xs">
+                          <div className="text-slate-600 line-clamp-2" title={f.message}>{f.message}</div>
+                          {f.adminNotes && (
+                            <div className="text-[10px] text-blue-700 bg-blue-50 p-1 rounded mt-1">
+                              <strong>Note:</strong> {f.adminNotes}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-400 text-[11px] whitespace-nowrap">
+                          {f.createdAt ? new Date(f.createdAt).toLocaleString() : '-'}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap ${
+                            f.status === 'New' ? 'bg-amber-100 text-amber-800' :
+                            f.status === 'Under Review' ? 'bg-blue-100 text-blue-800' :
+                            'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {f.status}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenFeedback(f)}
+                              className="px-2 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-[10px] font-bold"
+                            >
+                              Open
+                            </button>
+                            {f.status !== 'Under Review' && (
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateFeedbackStatus(f.feedbackId, 'Under Review', f.adminNotes)}
+                                className="px-2 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded text-[10px] font-bold"
+                              >
+                                Review
+                              </button>
+                            )}
+                            {f.status !== 'Resolved' && (
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateFeedbackStatus(f.feedbackId, 'Resolved', f.adminNotes)}
+                                className="px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-[10px] font-bold"
+                              >
+                                Resolve
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Feedback Detail Modal (Admin only - includes internal notes) */}
+      {selectedFeedback && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-cu-gold" />
+                <h3 className="text-base font-extrabold text-slate-900">User Feedback Details</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedFeedback(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1.5 text-xs">
+              <div className="flex justify-between"><span className="text-slate-500">Feedback ID:</span><span className="font-mono text-slate-800">{selectedFeedback.feedbackId}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">User:</span><span className="font-bold text-slate-900">{selectedFeedback.userName || selectedFeedback.userId}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Email / ID:</span><span className="text-slate-700">{selectedFeedback.userEmail || selectedFeedback.userId}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Category:</span><span className="font-semibold text-slate-800">{selectedFeedback.type}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Submitted:</span><span className="text-slate-700">{selectedFeedback.createdAt ? new Date(selectedFeedback.createdAt).toLocaleString() : '-'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Last Updated:</span><span className="text-slate-700">{selectedFeedback.updatedAt ? new Date(selectedFeedback.updatedAt).toLocaleString() : '-'}</span></div>
+            </div>
+
+            <div className="text-xs">
+              <div className="font-bold text-slate-700 mb-1">Subject</div>
+              <div className="text-slate-900 font-semibold">{selectedFeedback.subject || '-'}</div>
+            </div>
+
+            <div className="text-xs">
+              <div className="font-bold text-slate-700 mb-1">Message</div>
+              <div className="text-slate-700 whitespace-pre-wrap bg-slate-50 border border-slate-100 rounded-xl p-3 max-h-48 overflow-y-auto">{selectedFeedback.message}</div>
+            </div>
+
+            <div className="text-xs">
+              <div className="font-bold text-slate-700 mb-1.5">Set Status</div>
+              <div className="flex gap-2">
+                {(['New', 'Under Review', 'Resolved'] as FeedbackStatus[]).map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => handleUpdateFeedbackStatus(selectedFeedback.feedbackId, s, feedbackNotesDraft)}
+                    className={`px-3 py-1.5 rounded-xl font-bold text-[11px] transition-colors ${
+                      selectedFeedback.status === s ? 'bg-cu-blue text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-xs">
+              <label className="block font-bold text-slate-700 mb-1">Internal Administrator Notes (only visible to admins)</label>
+              <textarea
+                rows={3}
+                value={feedbackNotesDraft}
+                onChange={e => setFeedbackNotesDraft(e.target.value)}
+                placeholder="Add internal notes about this feedback..."
+                className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cu-blue"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setSelectedFeedback(null)}
+                className="flex-1 py-2.5 px-4 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveFeedbackNotes}
+                disabled={feedbackSaving}
+                className="flex-1 py-2.5 px-4 bg-cu-blue hover:bg-cu-blue/90 text-white rounded-xl text-xs font-bold shadow transition-colors disabled:opacity-50"
+              >
+                {feedbackSaving ? 'Saving...' : 'Save Notes'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1734,6 +2279,183 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
         </div>
       )}
 
+      {/* Withdrawal Approval — Payment Method Selection Modal */}
+      {approvalTarget && approvalStep && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 relative">
+            <button
+              type="button"
+              onClick={() => { if (!approvalBusy) closeApprovalModal(); }}
+              disabled={approvalBusy}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 disabled:opacity-50"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            {/* Step 1: choose method */}
+            {approvalStep === 'method' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                    <DollarSign className="w-5 h-5 text-emerald-600" /> Approve Withdrawal — Choose Payment Method
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Request <strong>{approvalTarget.reference || approvalTarget.requestId}</strong> • ₦{Number(approvalTarget.amount).toLocaleString()} • {approvalTarget.bankName} ({approvalTarget.accountNumber})
+                  </p>
+                </div>
+                <p className="text-xs text-slate-600">You must choose how this withdrawal will be paid out. The method cannot be switched once processing begins.</p>
+                <div className="grid gap-3">
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={runPaystackApproval}
+                    className="w-full text-left p-4 rounded-2xl border-2 border-sky-200 hover:border-sky-400 hover:bg-sky-50 transition-colors disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 font-black text-sky-800 text-sm">
+                      <CreditCard className="w-4 h-4" /> Paystack Transfer
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">Automated secure transfer through the existing Paystack integration. Marked successful only after Paystack confirms.</p>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => setApprovalStep('manual')}
+                    className="w-full text-left p-4 rounded-2xl border-2 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50 transition-colors disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2 font-black text-indigo-800 text-sm">
+                      <Store className="w-4 h-4" /> Manual Bank Transfer
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">Transfer the funds to the user's bank yourself, then confirm the outcome here.</p>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: manual transfer details & actions */}
+            {approvalStep === 'manual' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Manual Bank Transfer</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Transfer the amount to the account below, then record the outcome.</p>
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-2">
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">User's Full Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.userName || '—'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Amount</span><span className="font-black text-slate-900">₦{Number(approvalTarget.amount).toLocaleString()}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Bank Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.bankName || '—'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Account Number</span><span className="font-mono font-bold text-slate-900 text-right">{approvalTarget.accountNumber || '—'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Account Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.accountName || '—'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Withdrawal Reference</span><span className="font-mono text-slate-700 text-right">{approvalTarget.reference || approvalTarget.requestId}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Request Date</span><span className="text-slate-700 text-right">{approvalTarget.createdAt ? new Date(approvalTarget.createdAt).toLocaleString() : '—'}</span></div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => setApprovalStep('manual_confirm')}
+                    className="flex-1 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    <CheckCircle className="w-4 h-4" /> I Have Transferred
+                  </button>
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => { setManualFailureReason(''); setApprovalStep('manual_failed'); }}
+                    className="flex-1 px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    <AlertTriangle className="w-4 h-4" /> Transfer Failed
+                  </button>
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => setApprovalStep('method')}
+                    className="px-3.5 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Back
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2a: confirm the transfer actually completed */}
+            {approvalStep === 'manual_confirm' && (
+              <div className="space-y-4">
+                <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Confirm Transfer Completed</h3>
+                  <p className="text-sm text-slate-600 mt-1">
+                    Confirm that you have actually completed a bank transfer of <strong>₦{Number(approvalTarget.amount).toLocaleString()}</strong> to {approvalTarget.bankName} ({approvalTarget.accountNumber}).
+                  </p>
+                  <p className="text-xs text-slate-500 mt-2 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                    This will mark the withdrawal <strong>Successful</strong>, finalize the reserved balance deduction, and notify the user. Only confirm if the money has genuinely left your account.
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => setApprovalStep('manual')}
+                    className="flex-1 px-3.5 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Go Back
+                  </button>
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={runManualConfirm}
+                    className="flex-1 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    {approvalBusy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</> : 'Confirm Transfer Completed'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2b: record the failure */}
+            {approvalStep === 'manual_failed' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Transfer Failed</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Explain why the transfer could not be completed. This reason is saved to the withdrawal record and shared with the user.
+                  </p>
+                </div>
+                <textarea
+                  rows={4}
+                  value={manualFailureReason}
+                  onChange={(e) => setManualFailureReason(e.target.value)}
+                  disabled={approvalBusy}
+                  placeholder="e.g. Account name mismatch, bank network failure, invalid account number..."
+                  className="w-full text-xs px-3 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 disabled:bg-slate-100"
+                />
+                <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
+                  Marking as Failed releases the reserved amount back to the user's available sales balance so they can request again.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={approvalBusy}
+                    onClick={() => setApprovalStep('manual')}
+                    className="flex-1 px-3.5 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Go Back
+                  </button>
+                  <button
+                    type="button"
+                    disabled={approvalBusy || !manualFailureReason.trim()}
+                    onClick={runManualFailure}
+                    className="flex-1 px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    {approvalBusy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</> : 'Record Failure'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Bulk Withdrawal Approval Modal */}
       {bulkWithdrawalModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -1751,7 +2473,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               <div><strong>Total Pending Payouts:</strong> {withdrawals.filter(w => w.status === 'pending').length} requests</div>
               <div><strong>Total Sum:</strong> ₦{withdrawals.filter(w => w.status === 'pending').reduce((s, w) => s + Number(w.amount || 0), 0).toLocaleString()}</div>
               <div className="text-[11px] text-emerald-700 pt-1">
-                Each transfer will execute independently through Paystack. If any individual transfer fails, the seller's sales balance will be safely restored automatically.
+                Each transfer will execute independently through Paystack. If an individual transfer fails, the amount remains reserved for that request (never lost) and can be safely retried later.
               </div>
             </div>
 
@@ -1804,7 +2526,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               </button>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
               <div className="p-2.5 rounded-xl bg-slate-100">
                 <div className="font-extrabold text-base text-slate-900">{bulkSummary.total}</div>
                 <div className="text-[10px] text-slate-500 font-bold uppercase">Total</div>

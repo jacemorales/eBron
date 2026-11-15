@@ -89,7 +89,7 @@ export const BuyerWalletPage: React.FC<{ onToast: (type: 'success' | 'error' | '
         ) : (
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm text-xs">
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full min-w-[600px] text-left">
                 <thead className="bg-slate-50 border-b border-slate-100 font-bold uppercase text-slate-500 text-[11px]">
                   <tr>
                     <th className="p-3.5">Activity</th>

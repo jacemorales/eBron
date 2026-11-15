@@ -4,6 +4,7 @@ import type { Product, ProductCategory } from '../types';
 import { api } from '../services/api';
 import { ProductCard } from '../components/ProductCard';
 import { EmptyState } from '../components/EmptyState';
+import { isProductAvailableForBrowsing } from '../utils/productUtils';
 
 const CATEGORIES: ('All' | ProductCategory)[] = [
   'All',
@@ -30,11 +31,8 @@ export const BrowseProducts: React.FC<{ onToast: (type: 'success' | 'error' | 'i
         category: category === 'All' ? undefined : category,
         search: search.trim() || undefined
       });
-      // Ensure sold-out items are hidden from public browsing
-      const availableList = data.filter(p => {
-        const avail = p.availableStock !== undefined ? p.availableStock : (p.stockStatus === 'sold_out' ? 0 : 1);
-        return p.availability === 'available' && p.stockStatus !== 'sold_out' && avail > 0;
-      });
+      // Ensure sold-out and unavailable items are hidden from public browsing
+      const availableList = data.filter(isProductAvailableForBrowsing);
       setProducts(availableList);
     } catch (e) {
       console.error(e);

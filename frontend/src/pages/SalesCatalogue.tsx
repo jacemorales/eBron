@@ -60,11 +60,11 @@ export const SalesCatalogue: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
           <FolderOpen className="w-6 h-6 text-cu-blue" /> Sales Catalogue
         </h1>
-        <button onClick={() => navigate('/sell/add')} className="px-4 py-2 bg-cu-gold text-cu-blue rounded-xl font-bold text-xs flex items-center gap-1">
+        <button onClick={() => navigate('/sell/add')} className="w-full sm:w-auto justify-center px-4 py-2 bg-cu-gold text-cu-blue rounded-xl font-bold text-xs flex items-center gap-1">
           <PlusCircle className="w-4 h-4" /> Add Item
         </button>
       </div>

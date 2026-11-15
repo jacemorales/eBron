@@ -5,8 +5,26 @@ export const WITHDRAWAL_STATUS = {
   FAILED: 'failed',
   APPROVED: 'approved',
   REJECTED: 'rejected',
-  PROCESSED: 'processed'
+  PROCESSED: 'processed',
+  REVERSED: 'reversed',
+  CANCELLED: 'cancelled'
 };
+
+// Payment methods an administrator may choose when approving a withdrawal.
+export const WITHDRAWAL_PAYMENT_METHOD = {
+  PAYSTACK: 'paystack',
+  MANUAL_BANK_TRANSFER: 'manual_bank_transfer'
+};
+
+// Statuses that mean a withdrawal can no longer be cancelled by the user.
+const NON_CANCELLABLE_STATUSES = [
+  WITHDRAWAL_STATUS.PROCESSING,
+  WITHDRAWAL_STATUS.SUCCESSFUL,
+  WITHDRAWAL_STATUS.PROCESSED,
+  WITHDRAWAL_STATUS.REJECTED,
+  WITHDRAWAL_STATUS.REVERSED,
+  WITHDRAWAL_STATUS.CANCELLED
+];
 
 // ---------------- BUYER WALLET (SPENDING ONLY) ---------------- //
 
@@ -102,6 +120,7 @@ export function createInitialSalesBalance(userId) {
     userId,
     availableBalance: 0,
     pendingBalance: 0,
+    reservedBalance: 0,
     totalEarnings: 0,
     totalWithdrawals: 0,
     updatedAt: new Date().toISOString()
@@ -183,7 +202,55 @@ export function validateWithdrawalBankAndAccount(bankCodeOrName, accountNumber) 
   return { valid: errors.length === 0, errors, bank };
 }
 
-export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName }) {
+/**
+ * Reserves funds for a pending withdrawal: moves the amount from available -> reserved.
+ * Never deducts funds permanently and never marks the withdrawal as paid.
+ */
+export function reserveWithdrawalFunds(salesBalance, amount) {
+  const num = Number(amount);
+  if (Number(salesBalance.availableBalance || 0) < num) {
+    throw new Error('Insufficient available sales balance. Pending sales cannot be withdrawn.');
+  }
+  return {
+    ...salesBalance,
+    availableBalance: Number((Number(salesBalance.availableBalance || 0) - num).toFixed(2)),
+    reservedBalance: Number((Number(salesBalance.reservedBalance || 0) + num).toFixed(2)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Releases a previously reserved amount back into the available balance (e.g. on rejection).
+ */
+export function releaseWithdrawalReservation(salesBalance, amount) {
+  const num = Number(amount);
+  const reserved = Number(salesBalance.reservedBalance || 0);
+  const releaseAmt = Math.min(reserved, num);
+  return {
+    ...salesBalance,
+    reservedBalance: Number((reserved - releaseAmt).toFixed(2)),
+    availableBalance: Number((Number(salesBalance.availableBalance || 0) + releaseAmt).toFixed(2)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Finalizes a reserved amount once a transfer has been confirmed successful:
+ * removes it from reserved and increases the successfully withdrawn total.
+ */
+export function finalizeWithdrawalReservation(salesBalance, amount) {
+  const num = Number(amount);
+  const reserved = Number(salesBalance.reservedBalance || 0);
+  const finalAmt = Math.min(reserved, num);
+  return {
+    ...salesBalance,
+    reservedBalance: Number((reserved - finalAmt).toFixed(2)),
+    totalWithdrawals: Number((Number(salesBalance.totalWithdrawals || 0) + finalAmt).toFixed(2)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName = '' }) {
   const num = Number(amount);
   if (isNaN(num) || num <= 0) {
     throw new Error('Withdrawal amount must be a positive number.');
@@ -191,8 +258,8 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
   if (Number(salesBalance.availableBalance || 0) < num) {
     throw new Error('Insufficient available sales balance. Pending sales cannot be withdrawn.');
   }
-  if (!bankName || !accountNumber || !accountName) {
-    throw new Error('Complete bank details (bank name, account number, account name) are required.');
+  if (!bankName || !accountNumber) {
+    throw new Error('Complete bank details (bank name and account number) are required.');
   }
 
   const bankVal = validateWithdrawalBankAndAccount(bankCode || bankName, accountNumber);
@@ -200,16 +267,11 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
     throw new Error(bankVal.errors[0]);
   }
 
-  // Deduct from available balance to lock the funds and prevent double-withdrawal, track requested total withdrawals
-  const updatedBalance = {
-    ...salesBalance,
-    availableBalance: Number((Number(salesBalance.availableBalance || 0) - num).toFixed(2)),
-    totalWithdrawals: Number((Number(salesBalance.totalWithdrawals || 0) + num).toFixed(2)),
-    updatedAt: new Date().toISOString()
-  };
+  // Reserve funds (available -> reserved). No Paystack call, no permanent deduction.
+  const updatedBalance = reserveWithdrawalFunds(salesBalance, num);
 
   const reqId = 'wdr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const reference = 'WD-' + Math.floor(100000 + Math.random() * 900000);
+  const reference = 'WD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
   const withdrawalRequest = {
     requestId: reqId,
@@ -218,18 +280,125 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
     bankName: bankVal.bank.name,
     bankCode: bankVal.bank.code,
     accountNumber: String(accountNumber).trim(),
-    accountName,
+    accountName: accountName || '',
     status: WITHDRAWAL_STATUS.PENDING,
     reference,
     paystackRecipientCode: null,
     paystackTransferCode: null,
     paystackStatus: null,
+    paymentMethod: '',
+    adminId: '',
+    manualConfirmedBy: '',
+    manualConfirmedAt: '',
+    rejectionReason: '',
+    failureReason: '',
     adminNotes: '',
     processedAt: null,
-    createdAt: new Date().toISOString()
+    completedAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
   return { salesBalance: updatedBalance, withdrawalRequest };
+}
+
+/**
+ * Cancel a withdrawal request before payment processing begins. Releases the
+ * reserved amount back into the seller's available balance exactly once.
+ * Throws for any state that must not be auto-cancelled.
+ */
+export function cancelWithdrawalRequest(withdrawalRequest, salesBalance, reason = 'Cancelled by user.') {
+  if (!withdrawalRequest) throw new Error('Withdrawal request not found.');
+
+  const status = withdrawalRequest.status;
+  if (status === WITHDRAWAL_STATUS.CANCELLED) {
+    return { withdrawalRequest, salesBalance, status, alreadyCancelled: true };
+  }
+  if (status === WITHDRAWAL_STATUS.SUCCESSFUL || status === WITHDRAWAL_STATUS.PROCESSED) {
+    throw new Error('This withdrawal has already been paid out and cannot be cancelled.');
+  }
+  // A Paystack attempt that produced a transfer code is considered in-flight.
+  if (status === WITHDRAWAL_STATUS.PROCESSING || (status === WITHDRAWAL_STATUS.FAILED && withdrawalRequest.paystackTransferCode)) {
+    throw new Error('This withdrawal is already being processed and cannot be cancelled.');
+  }
+  if (NON_CANCELLABLE_STATUSES.indexOf(status) !== -1) {
+    throw new Error('This withdrawal cannot be cancelled in its current state.');
+  }
+
+  const now = new Date().toISOString();
+  const amt = Number(withdrawalRequest.amount) || 0;
+
+  const updatedSalesBalance = salesBalance ? releaseWithdrawalReservation(salesBalance, amt) : salesBalance;
+
+  const updatedRequest = {
+    ...withdrawalRequest,
+    status: WITHDRAWAL_STATUS.CANCELLED,
+    failureReason: reason,
+    processedAt: now,
+    updatedAt: now
+  };
+
+  return { withdrawalRequest: updatedRequest, salesBalance: updatedSalesBalance, status: WITHDRAWAL_STATUS.CANCELLED };
+}
+
+/**
+ * Process a MANUAL BANK TRANSFER approval. The admin must either confirm the
+ * transfer completed ('confirmed') or report a failure ('failed' + reason).
+ * Never marks a withdrawal successful without explicit admin confirmation.
+ */
+export function processManualWithdrawal(withdrawalRequest, salesBalance, { action, adminId = '', failureReason = '' } = {}) {
+  if (!withdrawalRequest) throw new Error('Withdrawal request not found.');
+
+  const status = withdrawalRequest.status;
+  if (status === WITHDRAWAL_STATUS.SUCCESSFUL || status === WITHDRAWAL_STATUS.PROCESSED) {
+    throw new Error('Withdrawal has already been successfully processed.');
+  }
+  if ([WITHDRAWAL_STATUS.REJECTED, WITHDRAWAL_STATUS.CANCELLED, WITHDRAWAL_STATUS.REVERSED].indexOf(status) !== -1) {
+    throw new Error('This withdrawal is closed and cannot be processed.');
+  }
+  // Never switch methods while a Paystack transfer is in flight.
+  if (status === WITHDRAWAL_STATUS.PROCESSING && withdrawalRequest.paystackTransferCode) {
+    throw new Error('A Paystack transfer is already in progress for this request.');
+  }
+
+  const now = new Date().toISOString();
+  const amt = Number(withdrawalRequest.amount) || 0;
+
+  if (action === 'confirmed') {
+    const updatedSalesBalance = salesBalance ? finalizeWithdrawalReservation(salesBalance, amt) : salesBalance;
+    const updatedRequest = {
+      ...withdrawalRequest,
+      status: WITHDRAWAL_STATUS.SUCCESSFUL,
+      paymentMethod: WITHDRAWAL_PAYMENT_METHOD.MANUAL_BANK_TRANSFER,
+      adminId: adminId || withdrawalRequest.adminId || '',
+      manualConfirmedBy: adminId || withdrawalRequest.manualConfirmedBy || '',
+      manualConfirmedAt: now,
+      processedAt: now,
+      completedAt: now,
+      updatedAt: now
+    };
+    return { withdrawalRequest: updatedRequest, salesBalance: updatedSalesBalance, status: WITHDRAWAL_STATUS.SUCCESSFUL };
+  }
+
+  if (action === 'failed') {
+    if (!failureReason || !String(failureReason).trim()) {
+      throw new Error('A failure explanation is required.');
+    }
+    // Payment was not made: release the reservation back to the available balance.
+    const updatedSalesBalance = salesBalance ? releaseWithdrawalReservation(salesBalance, amt) : salesBalance;
+    const updatedRequest = {
+      ...withdrawalRequest,
+      status: WITHDRAWAL_STATUS.FAILED,
+      paymentMethod: WITHDRAWAL_PAYMENT_METHOD.MANUAL_BANK_TRANSFER,
+      adminId: adminId || withdrawalRequest.adminId || '',
+      failureReason: String(failureReason).trim(),
+      processedAt: now,
+      updatedAt: now
+    };
+    return { withdrawalRequest: updatedRequest, salesBalance: updatedSalesBalance, status: WITHDRAWAL_STATUS.FAILED };
+  }
+
+  throw new Error('Select a manual transfer outcome ("confirmed" or "failed").');
 }
 
 export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fourthArg = null) {
@@ -275,10 +444,8 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
   if (isSuccess) {
     let updatedSalesBalance = salesBalance;
     if (salesBalance) {
-      updatedSalesBalance = {
-        ...salesBalance,
-        updatedAt: now
-      };
+      // Finalize the reservation: reserved -> successfully withdrawn total.
+      updatedSalesBalance = finalizeWithdrawalReservation(salesBalance, amt);
     }
 
     const updatedRequest = {
@@ -288,7 +455,9 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
       paystackTransferCode: paystackResult.transferCode || withdrawalRequest.paystackTransferCode,
       paystackStatus: paystackResult.transferStatus || 'success',
       adminNotes: paystackResult.message || paystackResult.adminNotes || 'Transfer completed successfully via Paystack',
-      processedAt: now
+      processedAt: now,
+      completedAt: now,
+      updatedAt: now
     };
 
     const transaction = {
@@ -313,11 +482,9 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
   if (isFailed) {
     let updatedSalesBalance = salesBalance;
     if (salesBalance) {
-      // Restore available sales balance and reverse requested total withdrawals so funds are not lost
+      // Keep the amount reserved while the admin investigates/retries. Funds are never lost or duplicated.
       updatedSalesBalance = {
         ...salesBalance,
-        availableBalance: Number((Number(salesBalance.availableBalance || 0) + amt).toFixed(2)),
-        totalWithdrawals: Math.max(0, Number((Number(salesBalance.totalWithdrawals || 0) - amt).toFixed(2))),
         updatedAt: now
       };
     }
@@ -326,8 +493,9 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
       ...withdrawalRequest,
       status: WITHDRAWAL_STATUS.FAILED,
       paystackStatus: 'failed',
-      adminNotes: paystackResult?.error || paystackResult?.adminNotes || 'Paystack transfer initiation failed. Funds restored to available balance.',
-      processedAt: now
+      adminNotes: paystackResult?.error || paystackResult?.adminNotes || 'Paystack transfer initiation failed. Funds remain reserved for safe retry.',
+      processedAt: now,
+      updatedAt: now
     };
 
     return {
@@ -341,20 +509,19 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
   if (isRejected) {
     let updatedSalesBalance = salesBalance;
     if (salesBalance) {
-      // Restore available balance and reverse requested total withdrawals upon admin rejection
-      updatedSalesBalance = {
-        ...salesBalance,
-        availableBalance: Number((Number(salesBalance.availableBalance || 0) + amt).toFixed(2)),
-        totalWithdrawals: Math.max(0, Number((Number(salesBalance.totalWithdrawals || 0) - amt).toFixed(2))),
-        updatedAt: now
-      };
+      // Release the reservation back into the available balance upon admin rejection.
+      updatedSalesBalance = releaseWithdrawalReservation(salesBalance, amt);
     }
+
+    const rejectionReason = paystackResult?.adminNotes || paystackResult?.error || 'Withdrawal request rejected by administrator.';
 
     const updatedRequest = {
       ...withdrawalRequest,
       status: WITHDRAWAL_STATUS.REJECTED,
-      adminNotes: paystackResult?.adminNotes || paystackResult?.error || 'Withdrawal request rejected by administrator. Balance restored.',
-      processedAt: now
+      rejectionReason,
+      adminNotes: rejectionReason,
+      processedAt: now,
+      updatedAt: now
     };
 
     return {

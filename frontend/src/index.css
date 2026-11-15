@@ -40,3 +40,33 @@
     cursor: not-allowed;
   }
 }
+
+/*
+ * Global modal layout safety.
+ *
+ * Every modal in eBron uses the same overlay pattern: `fixed inset-0` with a
+ * centered dialog panel. These rules guarantee that:
+ *  - the overlay itself can scroll when a panel is taller than the viewport,
+ *  - the dialog panel never exceeds the visible viewport height and scrolls
+ *    internally instead of clipping content or action buttons,
+ *  - scroll chaining to the background page is prevented.
+ * This applies consistently on desktop, Android and iOS.
+ */
+.fixed.inset-0 {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.fixed.inset-0 > * {
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent the background page from scrolling while any modal is open */
+body:has(.fixed.inset-0) {
+  overflow: hidden;
+}

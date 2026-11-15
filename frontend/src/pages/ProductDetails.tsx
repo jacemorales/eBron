@@ -5,6 +5,7 @@ import type { Product, ReportCategory, ProductReport } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { maskEmail } from '../utils/mask';
+import { getProductStock, isProductSoldOut } from '../utils/productUtils';
 
 const REPORT_CATEGORIES: ReportCategory[] = [
   'Scammer or fraudulent seller',
@@ -79,9 +80,11 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
     if (!user) { navigate('/login?redirect=' + encodeURIComponent(window.location.pathname)); return; }
     if (!product) return;
     if (user.userId === product.sellerId) { onToast('error', 'Cannot buy your own product.'); return; }
-    const available = product.availableStock !== undefined ? product.availableStock : 1;
-    if (available <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available') {
-      onToast('error', 'This item is sold out.');
+    const available = getProductStock(product);
+    const isSold = isProductSoldOut(product);
+    const isReserved = product.availability === 'reserved';
+    if (isSold || isReserved || available <= 0) {
+      onToast('error', isReserved ? 'This item has been reserved.' : 'This item is sold out.');
       return;
     }
     navigate(`/checkout/${product.productId}?qty=${selectedQty}`);
@@ -157,14 +160,25 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                 </span>
               )}
               {(() => {
-                const availableStock = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
-                const isSoldOut = availableStock <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+                const availableStock = getProductStock(product);
+                const isSoldOut = isProductSoldOut(product);
+                const isReserved = product.availability === 'reserved';
 
-                return isSoldOut ? (
-                  <span className="text-xs bg-rose-50 text-rose-700 border border-rose-200 font-bold px-2.5 py-0.5 rounded">
-                    Sold Out
-                  </span>
-                ) : (
+                if (isSoldOut) {
+                  return (
+                    <span className="text-xs bg-rose-50 text-rose-700 border border-rose-200 font-bold px-2.5 py-0.5 rounded">
+                      Sold Out
+                    </span>
+                  );
+                }
+                if (isReserved) {
+                  return (
+                    <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 font-bold px-2.5 py-0.5 rounded">
+                      Reserved
+                    </span>
+                  );
+                }
+                return (
                   <span className="text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold px-2.5 py-0.5 rounded">
                     {availableStock} in stock
                   </span>
@@ -182,12 +196,14 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
 
           <div className="space-y-3 pt-4 border-t border-slate-100">
             {(() => {
-              const availableStock = product.availableStock !== undefined ? product.availableStock : (product.stockStatus === 'sold_out' ? 0 : 1);
-              const isSoldOut = availableStock <= 0 || product.stockStatus === 'sold_out' || product.availability !== 'available';
+              const availableStock = getProductStock(product);
+              const isSoldOut = isProductSoldOut(product);
+              const isReserved = product.availability === 'reserved';
+              const cannotBuy = isSoldOut || isReserved;
 
               return (
                 <>
-                  {!isSoldOut && availableStock > 1 && (
+                  {!cannotBuy && availableStock > 1 && (
                     <div className="flex items-center gap-2 pb-1">
                       <label className="text-xs font-bold text-slate-700">Quantity:</label>
                       <select
@@ -218,12 +234,12 @@ export const ProductDetails: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                     <button
                       type="button"
                       onClick={handleBuy}
-                      disabled={isSoldOut}
+                      disabled={cannotBuy}
                       className={`flex-1 py-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition ${
-                        isSoldOut ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-cu-gold hover:bg-cu-goldHover text-cu-blue'
+                        cannotBuy ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-cu-gold hover:bg-cu-goldHover text-cu-blue'
                       }`}
                     >
-                      <ShoppingBag className="w-4 h-4" /> {isSoldOut ? 'Sold Out' : 'Buy Now'}
+                      <ShoppingBag className="w-4 h-4" /> {isSoldOut ? 'Sold Out' : isReserved ? 'Reserved' : 'Buy Now'}
                     </button>
                   </div>
                 </>

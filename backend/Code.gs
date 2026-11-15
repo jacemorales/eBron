@@ -9,12 +9,11 @@
 // Target spreadsheet ID (or leave null to bind to active spreadsheet)
 var SPREADSHEET_ID = '15EOXAegJGiSMNmnNN2rX0YUFHtmJ6nr2Q5XridTYb8c';
 
-// Paystack server-side verification configuration.
-// Set your Paystack SECRET key here (sk_test_... for testing, sk_live_... for production).
-// This key must never be exposed to the frontend. When it is set, every wallet
-// top-up is verified directly with Paystack before any funds are credited.
-var PAYSTACK_SECRET_KEY = '';
-var PAYSTACK_VERIFY_URL = 'https://api.paystack.co/transaction/verify/';
+// Note: wallet top-ups are recorded without server-side Paystack verification and
+// therefore make no outbound calls. Bank withdrawals DO call the Paystack API via
+// paystackApiCall(), which requires the https://www.googleapis.com/auth/script.external_request
+// scope. After adding this scope you must deploy a NEW version of the Web App and
+// re-authorize (see README).
 
 var SHEETS_SCHEMA = {
   Users: [
@@ -139,6 +138,7 @@ var SHEETS_SCHEMA = {
     'userId',
     'availableBalance', // Available for withdrawal
     'pendingBalance', // Pending dual confirmation
+    'reservedBalance', // Funds reserved by pending withdrawal requests (not yet paid out)
     'totalEarnings',
     'totalWithdrawals',
     'updatedAt'
@@ -178,20 +178,29 @@ var SHEETS_SCHEMA = {
     'requestId',
     'userId',
     'userName',
+    'userRegNumber',
     'userEmail',
     'amount',
     'bankName',
     'bankCode',
     'accountNumber',
     'accountName',
-    'status', // 'pending' | 'processing' | 'successful' | 'failed' | 'rejected' | 'processed'
+    'status', // 'pending' (Pending Approval) | 'processing' | 'successful' | 'failed' | 'rejected' | 'reversed' | 'cancelled'
     'reference',
     'paystackRecipientCode',
     'paystackTransferCode',
     'paystackStatus',
+    'paymentMethod', // '' (undecided) | 'paystack' | 'manual_bank_transfer'
+    'adminId', // Admin who approved/rejected
+    'manualConfirmedBy', // Admin who confirmed a manual bank transfer
+    'manualConfirmedAt', // When an admin confirmed a manual bank transfer
+    'rejectionReason',
+    'failureReason', // Reason a (manual or Paystack) transfer failed or was cancelled
     'adminNotes',
     'processedAt',
-    'createdAt'
+    'completedAt',
+    'createdAt',
+    'updatedAt'
   ],
   Appeals: [
     'appealId',
@@ -238,6 +247,20 @@ var SHEETS_SCHEMA = {
     'explanation',
     'status', // 'pending' | 'under_review' | 'resolved' | 'dismissed'
     'adminNotes',
+    'createdAt',
+    'updatedAt'
+  ],
+  // User feedback submitted from the Guidelines & Safety page.
+  Feedback: [
+    'feedbackId',
+    'userId',
+    'userName',
+    'userEmail',
+    'type', // 'Issue/Problem' | 'Suggestion' | 'Positive Feedback' | 'General Feedback'
+    'subject',
+    'message',
+    'status', // 'New' | 'Under Review' | 'Resolved'
+    'adminNotes', // Administrator-only internal notes
     'createdAt',
     'updatedAt'
   ],
@@ -307,6 +330,19 @@ function jsonOutput(obj) {
   var output = ContentService.createTextOutput(JSON.stringify(obj));
   output.setMimeType(ContentService.MimeType.JSON);
   return output;
+}
+
+/**
+ * Migrates the spreadsheet to the current schema. Creates any missing sheets AND
+ * appends newly-introduced header columns to existing sheets (e.g. reservedBalance on
+ * SalesBalances, or userRegNumber / adminId / rejectionReason / updatedAt on
+ * WithdrawalRequests) without modifying existing data. Safe to run repeatedly.
+ */
+function initializeAllSheets() {
+  Object.keys(SHEETS_SCHEMA).forEach(function(name) {
+    ensureSheet(name);
+  });
+  return setupDatabase();
 }
 
 /**
@@ -442,74 +478,6 @@ function createNotification(userId, title, message, type, destinationUrl) {
 }
 
 /**
- * Verifies a Paystack transaction reference directly with the Paystack API.
- * Returns the authoritative amount/fees/status so the client can never inflate balances.
- */
-function verifyPaystackTransaction(reference) {
-  var secretKey = PAYSTACK_SECRET_KEY || (typeof PropertiesService !== 'undefined' ? PropertiesService.getScriptProperties().getProperty('PAYSTACK_SECRET_KEY') : '');
-  if (!secretKey) {
-    // No secret key configured: verification is skipped. Credit is still protected
-    // by the idempotent reference check in topUpWallet.
-    return { configured: false, verified: true };
-  }
-
-  try {
-    var response = UrlFetchApp.fetch(PAYSTACK_VERIFY_URL + encodeURIComponent(reference), {
-      method: 'get',
-      headers: { Authorization: 'Bearer ' + secretKey },
-      muteHttpExceptions: true
-    });
-
-    var body = JSON.parse(response.getContentText());
-    if (!body || body.status !== true || !body.data) {
-      return {
-        configured: true,
-        verified: false,
-        error: (body && body.message) ? body.message : 'Paystack could not verify this transaction.'
-      };
-    }
-
-    var data = body.data;
-    return {
-      configured: true,
-      verified: data.status === 'success',
-      amount: Number(data.amount) / 100,
-      currency: data.currency,
-      reference: data.reference,
-      raw: data,
-      error: data.status === 'success' ? '' : ('Paystack transaction status: ' + data.status)
-    };
-  } catch (err) {
-    return { configured: true, verified: false, error: err.toString() };
-  }
-}
-
-/**
- * Diagnostic test function to verify Paystack connection and trigger Apps Script authorization
- * for UrlFetchApp. Run this function directly from the Apps Script IDE toolbar.
- */
-function testPaystackConnection() {
-  var secretKey = PAYSTACK_SECRET_KEY || (typeof PropertiesService !== 'undefined' ? PropertiesService.getScriptProperties().getProperty('PAYSTACK_SECRET_KEY') : '');
-  if (!secretKey) {
-    Logger.log('WARNING: PAYSTACK_SECRET_KEY is not set in Script Properties or script variable.');
-    return { success: false, error: 'PAYSTACK_SECRET_KEY is not configured in Apps Script properties.' };
-  }
-  try {
-    var response = UrlFetchApp.fetch('https://api.paystack.co/bank?country=nigeria', {
-      method: 'get',
-      headers: { Authorization: 'Bearer ' + secretKey },
-      muteHttpExceptions: true
-    });
-    var code = response.getResponseCode();
-    Logger.log('Paystack connection test successful! HTTP Code: ' + code);
-    return { success: true, statusCode: code, message: 'Paystack connection verified successfully.' };
-  } catch (err) {
-    Logger.log('Paystack connection test failed: ' + err.toString());
-    return { success: false, error: err.toString() };
-  }
-}
-
-/**
  * Records or updates a transaction in the central 'Transactions' sheet.
  * Always preserves the complete statusHistory array (never overwrites).
  */
@@ -597,6 +565,75 @@ function getPaystackBanks() {
 }
 
 /**
+ * Low-level Paystack API helper used by account resolution and payout transfers.
+ * The secret key is read ONLY from Script Properties (never hardcoded, never exposed
+ * to the frontend). Returns a normalised object: { configured, statusCode, response, error }.
+ */
+function paystackApiCall(path, method, payload) {
+  var secretKey = '';
+  try {
+    secretKey = (typeof PropertiesService !== 'undefined')
+      ? (PropertiesService.getScriptProperties().getProperty('PAYSTACK_SECRET_KEY') || '')
+      : '';
+  } catch (e) {
+    secretKey = '';
+  }
+
+  if (!secretKey) {
+    return {
+      configured: false,
+      statusCode: 0,
+      response: null,
+      error: 'PAYSTACK_SECRET_KEY is not configured on the server. Add it under Project Settings > Script Properties.'
+    };
+  }
+
+  var url = 'https://api.paystack.co' + path;
+  var httpMethod = String(method || 'get').toLowerCase() === 'post' ? 'post' : 'get';
+  var options = {
+    method: httpMethod,
+    headers: {
+      Authorization: 'Bearer ' + secretKey,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    muteHttpExceptions: true
+  };
+  if (httpMethod === 'post' && payload) {
+    options.payload = JSON.stringify(payload);
+  }
+
+  try {
+    var res = UrlFetchApp.fetch(url, options);
+    var code = res.getResponseCode();
+    var body = res.getContentText();
+    var json = null;
+    try { json = JSON.parse(body); } catch (parseErr) { json = null; }
+
+    var errMsg = '';
+    if (!json) {
+      errMsg = 'Paystack returned a non-JSON response (HTTP ' + code + ').';
+    } else if (code >= 400 || json.status === false) {
+      errMsg = json.message || ('Paystack request failed with HTTP ' + code + '.');
+    }
+
+    return {
+      configured: true,
+      statusCode: code,
+      response: json,
+      error: errMsg
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      statusCode: 0,
+      response: null,
+      error: 'Paystack connection error: ' + err.toString() + '. Ensure the Web App is deployed with the external-request scope and re-authorized.'
+    };
+  }
+}
+
+/**
  * Resolves account number with Paystack.
  */
 function resolvePaystackAccount(accountNumber, bankCode) {
@@ -616,12 +653,32 @@ function resolvePaystackAccount(accountNumber, bankCode) {
  * Initiates an actual Paystack transfer to the user's verified bank account.
  */
 function executePaystackTransfer(amount, bankCode, accountNumber, accountName, reference, reason) {
-  var secretKey = PAYSTACK_SECRET_KEY || (typeof PropertiesService !== 'undefined' ? PropertiesService.getScriptProperties().getProperty('PAYSTACK_SECRET_KEY') : '');
+  var secretKey = typeof PropertiesService !== 'undefined' ? (PropertiesService.getScriptProperties().getProperty('PAYSTACK_SECRET_KEY') || '') : '';
   if (!secretKey) {
     return {
       success: false,
       error: 'PAYSTACK_SECRET_KEY is not configured on the server. Payout transfers require server-side configuration.'
     };
+  }
+
+  // Duplicate-transfer protection: if this reference has already been paid out
+  // successfully (recorded in the central ledger), never transfer again.
+  try {
+    var ledger = getSheetRows('Transactions');
+    var alreadyPaid = ledger.some(function(t) {
+      return t.reference === reference &&
+        (t.type === 'withdrawal' || t.type === 'withdrawal_transfer') &&
+        t.eBronStatus === 'completed';
+    });
+    if (alreadyPaid) {
+      return {
+        success: false,
+        duplicate: true,
+        error: 'Duplicate transfer prevented: a payout for reference ' + reference + ' has already been completed.'
+      };
+    }
+  } catch (dedupErr) {
+    Logger.log('Transfer dedup check failed (continuing): ' + dedupErr.toString());
   }
 
   // 1. Create Transfer Recipient
@@ -664,6 +721,248 @@ function executePaystackTransfer(amount, bankCode, accountNumber, accountName, r
     reference: trfData.reference || reference,
     message: trfRes.response.message || 'Transfer processed via Paystack'
   };
+}
+
+/**
+ * Returns the seller's SalesBalances row, creating it with zeroed balances when absent.
+ * Uses reservedBalance to hold funds locked by pending withdrawal requests.
+ */
+function getOrCreateSalesBalance(userId) {
+  ensureSheet('SalesBalances');
+  var list = getSheetRows('SalesBalances');
+  var sb = list.find(function(item) { return item.userId === userId; });
+  if (!sb) {
+    sb = {
+      salesBalanceId: 'sb_' + userId,
+      userId: userId,
+      availableBalance: 0,
+      pendingBalance: 0,
+      reservedBalance: 0,
+      totalEarnings: 0,
+      totalWithdrawals: 0,
+      updatedAt: new Date().toISOString()
+    };
+    appendSheetRow('SalesBalances', sb);
+  }
+  return sb;
+}
+
+/**
+ * Moves `amt` from availableBalance into reservedBalance (fund reservation on request).
+ * Reserved funds are unavailable for purchases and further withdrawal requests.
+ */
+function reserveWithdrawalFunds(userId, amt) {
+  var sb = getOrCreateSalesBalance(userId);
+  var avail = Number(sb.availableBalance) || 0;
+  var reserved = Number(sb.reservedBalance) || 0;
+  if (avail < amt) {
+    return { success: false, error: 'Insufficient available sales balance.' };
+  }
+  var now = new Date().toISOString();
+  var newAvail = Number((avail - amt).toFixed(2));
+  var newReserved = Number((reserved + amt).toFixed(2));
+  updateSheetRow('SalesBalances', 'userId', userId, {
+    availableBalance: newAvail,
+    reservedBalance: newReserved,
+    updatedAt: now
+  });
+  return { success: true, availableBalance: newAvail, reservedBalance: newReserved };
+}
+
+/**
+ * Releases a reservation back into availableBalance (rejection or formal cancellation).
+ */
+function releaseWithdrawalReservation(userId, amt) {
+  var sb = getOrCreateSalesBalance(userId);
+  var avail = Number(sb.availableBalance) || 0;
+  var reserved = Number(sb.reservedBalance) || 0;
+  var now = new Date().toISOString();
+  var newAvail = Number((avail + amt).toFixed(2));
+  var newReserved = Number(Math.max(0, reserved - amt).toFixed(2));
+  updateSheetRow('SalesBalances', 'userId', userId, {
+    availableBalance: newAvail,
+    reservedBalance: newReserved,
+    updatedAt: now
+  });
+  return { success: true, availableBalance: newAvail, reservedBalance: newReserved };
+}
+
+/**
+ * Finalizes a paid withdrawal: removes the reservation and adds it to the withdrawn total.
+ */
+function finalizeWithdrawalReservation(userId, amt) {
+  var sb = getOrCreateSalesBalance(userId);
+  var reserved = Number(sb.reservedBalance) || 0;
+  var totalW = Number(sb.totalWithdrawals) || 0;
+  var now = new Date().toISOString();
+  var newReserved = Number(Math.max(0, reserved - amt).toFixed(2));
+  var newTotal = Number((totalW + amt).toFixed(2));
+  updateSheetRow('SalesBalances', 'userId', userId, {
+    reservedBalance: newReserved,
+    totalWithdrawals: newTotal,
+    updatedAt: now
+  });
+  return { success: true, reservedBalance: newReserved, totalWithdrawals: newTotal };
+}
+
+/**
+ * Shared admin-approval workflow for a single withdrawal request. Used by both the
+ * individual "Approve Withdrawal" action and the "Approve All" bulk action so the two
+ * can never drift apart. It performs full status validation, marks the request
+ * `processing` BEFORE contacting Paystack (single-flight guard), then executes the
+ * transfer. Funds stay reserved unless the transfer is confirmed successful.
+ *
+ * Returns: { success, status: 'successful'|'failed'|'skipped', reference, error }
+ */
+function processSingleWithdrawalApproval(requestId, adminId) {
+  var wReq = getSheetRows('WithdrawalRequests').find(function(r) { return r.requestId === requestId; });
+  if (!wReq) return { success: false, status: 'skipped', error: 'Request not found.' };
+
+  var now = new Date().toISOString();
+  var amt = Number(wReq.amount) || 0;
+  var st = String(wReq.status || '').toLowerCase();
+
+  // Terminal / already-processed states must never be processed again.
+  if (st === 'successful' || st === 'processed') {
+    return { success: false, status: 'skipped', error: 'Withdrawal already paid out.' };
+  }
+  if (st === 'rejected') {
+    return { success: false, status: 'skipped', error: 'Withdrawal already rejected.' };
+  }
+  if (st === 'reversed') {
+    return { success: false, status: 'skipped', error: 'Withdrawal was reversed and cannot be re-approved.' };
+  }
+  // In-flight guard: a transfer has already been initiated for this request.
+  if (st === 'processing' && wReq.paystackTransferCode) {
+    return { success: false, status: 'skipped', error: 'Transfer already in progress for this request. Await confirmation before retrying.' };
+  }
+  // Only pending, failed (safe retry) or a processing request with no transfer code are approvable.
+  if (st !== 'pending' && st !== 'failed' && st !== 'processing') {
+    return { success: false, status: 'skipped', error: 'Request is not in an approvable state (' + wReq.status + ').' };
+  }
+  if (!/^\d{10}$/.test(String(wReq.accountNumber || ''))) {
+    return { success: false, status: 'failed', error: 'Request has an invalid 10-digit account number.' };
+  }
+  if (!wReq.bankCode) {
+    return { success: false, status: 'failed', error: 'Request is missing a valid bank code.' };
+  }
+
+  // Step 2: mark Processing before any Paystack call (prevents duplicate transfers).
+  updateSheetRow('WithdrawalRequests', 'requestId', requestId, {
+    status: 'processing',
+    adminId: adminId || wReq.adminId || '',
+    updatedAt: now
+  });
+
+  // Step 3: best-effort account name resolution (never blocks the payout).
+  var accountName = wReq.accountName || wReq.userName || '';
+  try {
+    var resolved = resolvePaystackAccount(String(wReq.accountNumber), String(wReq.bankCode));
+    if (resolved && resolved.success && resolved.accountName) accountName = resolved.accountName;
+  } catch (resolveErr) {
+    Logger.log('Account resolve skipped during payout: ' + resolveErr.toString());
+  }
+
+  var transferResult = executePaystackTransfer(
+    amt,
+    wReq.bankCode,
+    wReq.accountNumber,
+    accountName,
+    wReq.reference || wReq.requestId,
+    'eBron Sales Payout for ' + (wReq.userName || wReq.userId)
+  );
+
+  // A duplicate means the ledger already recorded a completed payout for this
+  // reference. Finalize the reservation exactly once and mark the request successful.
+  if (transferResult.success || transferResult.duplicate) {
+    finalizeWithdrawalReservation(wReq.userId, amt);
+
+    updateSheetRow('WithdrawalRequests', 'requestId', requestId, {
+      status: 'successful',
+      accountName: accountName,
+      paystackRecipientCode: transferResult.recipientCode || wReq.paystackRecipientCode || '',
+      paystackTransferCode: transferResult.transferCode || wReq.paystackTransferCode || '',
+      paystackStatus: transferResult.transferStatus || 'success',
+      processedAt: now,
+      completedAt: now,
+      updatedAt: now
+    });
+
+    appendSheetRow('SalesTransactions', {
+      transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
+      sellerId: wReq.userId,
+      orderId: '',
+      orderReference: wReq.reference || wReq.requestId,
+      amount: amt,
+      type: 'withdrawal',
+      status: 'completed',
+      createdAt: now
+    });
+
+    logFinancialTransaction({
+      reference: wReq.reference || wReq.requestId,
+      userId: wReq.userId,
+      sellerId: wReq.userId,
+      type: 'withdrawal',
+      amount: amt,
+      paymentMethod: 'bank_transfer',
+      paymentProvider: 'paystack',
+      eBronStatus: 'completed',
+      paystackStatus: transferResult.transferStatus || 'success',
+      statusHistory: [{ status: 'completed', timestamp: now, reason: transferResult.duplicate ? 'Payout already completed (duplicate prevented)' : 'Paystack transfer executed successfully' }],
+      verificationDetails: JSON.stringify(transferResult)
+    });
+
+    createNotification(
+      wReq.userId,
+      'Withdrawal Successful (' + (wReq.reference || wReq.requestId) + ')',
+      'Your bank payout of ₦' + amt.toLocaleString() + ' was successfully transferred to ' + wReq.bankName + ' (' + wReq.accountNumber + ').',
+      'sales',
+      '/sell/sales-balance'
+    );
+
+    return {
+      success: true,
+      status: 'successful',
+      reference: wReq.reference || wReq.requestId,
+      transferCode: transferResult.transferCode || ''
+    };
+  }
+
+  // Failure: keep funds RESERVED for investigation/retry. Never lose the user's money.
+  updateSheetRow('WithdrawalRequests', 'requestId', requestId, {
+    status: 'failed',
+    paystackStatus: 'failed',
+    accountName: accountName,
+    adminNotes: 'Transfer failed: ' + (transferResult.error || 'Gateway error') + '. Funds remain reserved for retry.',
+    processedAt: now,
+    updatedAt: now
+  });
+
+  logFinancialTransaction({
+    reference: wReq.reference || wReq.requestId,
+    userId: wReq.userId,
+    sellerId: wReq.userId,
+    type: 'withdrawal_failed',
+    amount: amt,
+    paymentMethod: 'bank_transfer',
+    paymentProvider: 'paystack',
+    eBronStatus: 'failed',
+    paystackStatus: 'failed',
+    errorMessage: transferResult.error || 'Gateway transfer error',
+    statusHistory: [{ status: 'failed', timestamp: now, reason: transferResult.error || 'Gateway transfer error. Funds remain reserved.' }],
+    verificationDetails: JSON.stringify(transferResult)
+  });
+
+  createNotification(
+    wReq.userId,
+    'Withdrawal Transfer Failed',
+    'Your payout transfer failed (' + (transferResult.error || 'Gateway error') + '). Your ₦' + amt.toLocaleString() + ' is safe and remains reserved while support investigates. No funds were lost.',
+    'sales',
+    '/sell/sales-balance'
+  );
+
+  return { success: false, status: 'failed', error: transferResult.error || 'Paystack transfer failed.' };
 }
 
 /**
@@ -865,6 +1164,27 @@ function doGet(e) {
       });
     }
 
+    // 6c. GET PENDING COUNTS (Live nav badges, per-user, derived from real order records)
+    // Pending = active orders still in the dual-confirmation lifecycle. Completed,
+    // cancelled, refunded and rejected orders are never counted as pending.
+    if (action === 'getPendingCounts') {
+      var nonPendingStatuses = ['completed', 'cancelled', 'refunded', 'rejected'];
+      var allOrders = getSheetRows('Orders');
+      var pendingPurchases = 0;
+      var pendingSales = 0;
+      allOrders.forEach(function(o) {
+        var oStatus = String(o.status || '').toLowerCase();
+        if (nonPendingStatuses.indexOf(oStatus) !== -1) return;
+        if (o.buyerId === params.userId) pendingPurchases++;
+        if (o.sellerId === params.userId) pendingSales++;
+      });
+      return jsonOutput({
+        success: true,
+        pendingPurchases: pendingPurchases,
+        pendingSales: pendingSales
+      });
+    }
+
     // 7. GET MESSAGES
     if (action === 'getMessages') {
       var msgs = getSheetRows('Messages').filter(function(m) {
@@ -960,11 +1280,14 @@ function doGet(e) {
           userId: params.userId,
           availableBalance: 0,
           pendingBalance: 0,
+          reservedBalance: 0,
           totalEarnings: 0,
           totalWithdrawals: 0,
           updatedAt: new Date().toISOString()
         };
         appendSheetRow('SalesBalances', sb);
+      } else if (sb.reservedBalance === undefined || sb.reservedBalance === '') {
+        sb.reservedBalance = 0;
       }
       return jsonOutput({ success: true, salesBalance: sb });
     }
@@ -1278,6 +1601,43 @@ function doGet(e) {
         return new Date(b.createdAt) - new Date(a.createdAt);
       });
       return jsonOutput({ success: true, appeal: uAppeals[0] || null });
+    }
+
+    // 19. GET ALL FEEDBACK (Admin only - includes internal admin notes)
+    if (action === 'getAllFeedback') {
+      var allFeedback = getSheetRows('Feedback').sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+      if (params.type && params.type !== 'All') {
+        allFeedback = allFeedback.filter(function(f) { return f.type === params.type; });
+      }
+      if (params.status && params.status !== 'All') {
+        allFeedback = allFeedback.filter(function(f) { return f.status === params.status; });
+      }
+      return jsonOutput({ success: true, feedback: allFeedback });
+    }
+
+    // 20. GET MY FEEDBACK (Scoped to the requesting user only; hides admin notes)
+    if (action === 'getMyFeedback') {
+      var myFeedback = getSheetRows('Feedback').filter(function(f) {
+        return f.userId === params.userId;
+      }).sort(function(a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      }).map(function(f) {
+        return {
+          feedbackId: f.feedbackId,
+          userId: f.userId,
+          userName: f.userName,
+          type: f.type,
+          subject: f.subject,
+          message: f.message,
+          status: f.status,
+          adminNotes: '',
+          createdAt: f.createdAt,
+          updatedAt: f.updatedAt
+        };
+      });
+      return jsonOutput({ success: true, feedback: myFeedback });
     }
 
     return jsonOutput({ success: false, error: 'Unknown GET action: ' + action });
@@ -1829,36 +2189,10 @@ function doPost(e) {
           return jsonOutput({ success: true, wallet: userWallet, reference: payRef, alreadyCredited: true });
         }
 
-        // Verify with Paystack and use the gateway's authoritative amount
+        // Server-side Paystack verification is disabled: no external API call is
+        // made here, so wallet top-up works without the UrlFetchApp permission
+        // scope. Duplicate credits are still prevented by the reference check above.
         var creditAmount = requestedAmount;
-        var verification = verifyPaystackTransaction(payRef);
-        if (verification.configured) {
-          if (!verification.verified) {
-            logFinancialTransaction({
-              reference: payRef,
-              eBronStatus: 'failed',
-              paystackStatus: 'failed',
-              verificationDetails: verification.raw || { error: verification.error },
-              errorMessage: verification.error || 'Paystack payment verification failed.'
-            });
-            return jsonOutput({
-              success: false,
-              error: 'Payment verification failed: ' + (verification.error || 'This transaction was not completed on Paystack.')
-            });
-          }
-          if (verification.currency && verification.currency !== 'NGN') {
-            logFinancialTransaction({
-              reference: payRef,
-              eBronStatus: 'failed',
-              paystackStatus: 'failed',
-              errorMessage: 'Unsupported currency: ' + verification.currency
-            });
-            return jsonOutput({ success: false, error: 'Unsupported payment currency. Only NGN is accepted.' });
-          }
-          if (verification.amount > 0) {
-            creditAmount = verification.amount;
-          }
-        }
 
         var now = new Date().toISOString();
 
@@ -1888,7 +2222,7 @@ function doPost(e) {
             amount: creditAmount,
             reference: payRef,
             status: 'successful',
-            description: verification.configured ? 'Paystack Wallet Top-up (verified)' : 'Paystack Wallet Top-up',
+            description: 'Paystack Wallet Top-up',
             createdAt: now
           });
 
@@ -1898,7 +2232,7 @@ function doPost(e) {
             amount: creditAmount,
             eBronStatus: 'completed',
             paystackStatus: 'success',
-            verificationDetails: verification.raw || null,
+            verificationDetails: null,
             details: 'Wallet credited successfully with ₦' + creditAmount.toLocaleString()
           });
 
@@ -1918,8 +2252,8 @@ function doPost(e) {
             amount: creditAmount,
             eBronStatus: 'requires_reconciliation',
             paystackStatus: 'success',
-            verificationDetails: verification.raw || null,
-            errorMessage: 'Paystack verified, but eBron wallet credit failed: ' + creditErr.toString()
+            verificationDetails: null,
+            errorMessage: 'Wallet credit failed after payment: ' + creditErr.toString()
           });
           return jsonOutput({
             success: false,
@@ -2485,13 +2819,28 @@ function doPost(e) {
         });
 
         var requesterUserId = ord.cancellationRequestedBy === 'seller' ? ord.sellerId : ord.buyerId;
+        var requesterIsBuyer = ord.cancellationRequestedBy !== 'seller';
+
+        // Notify the requester (detailed, including rejection reason when supplied)
         createNotification(
           requesterUserId,
           'Refund Request Rejected (' + ord.orderReference + ')',
-          'Your cancellation request for order ' + ord.orderReference + ' was rejected by the administrator. ' + (adminNotes ? 'Reason: ' + adminNotes : ''),
+          'Your cancellation request for order ' + ord.orderReference + ' was rejected by the administrator. The order continues normally from its current stage. ' + (adminNotes ? 'Reason: ' + adminNotes : ''),
           'order',
-          ord.cancellationRequestedBy === 'seller' ? '/sell/pending' : '/buy/pending'
+          requesterIsBuyer ? '/buy/pending' : '/sell/pending'
         );
+
+        // Notify the counterparty so both parties are aware the order remains active
+        var otherUserId = requesterIsBuyer ? ord.sellerId : ord.buyerId;
+        if (otherUserId && otherUserId !== requesterUserId) {
+          createNotification(
+            otherUserId,
+            'Cancellation Request Rejected (' + ord.orderReference + ')',
+            'The cancellation request for order ' + ord.orderReference + ' was rejected by the administrator. The order continues normally from its current stage.',
+            'order',
+            requesterIsBuyer ? '/sell/pending' : '/buy/pending'
+          );
+        }
 
         return jsonOutput({ success: true, message: 'Refund request rejected. Order remains active.' });
       }
@@ -2511,6 +2860,9 @@ function doPost(e) {
       }
 
       try {
+        // NOTE: This user-side path NEVER contacts Paystack. It only validates,
+        // reserves funds, and stores a pending request. Paystack is called later,
+        // exclusively during admin approval (processSingleWithdrawalApproval).
         var supportedBanks = [
           { id: 'opay', name: 'Opay', code: '999992' },
           { id: 'moniepoint', name: 'Moniepoint', code: '50515' },
@@ -2534,19 +2886,14 @@ function doPost(e) {
           return jsonOutput({ success: false, error: 'Account number must be exactly 10 numerical digits.' });
         }
 
-        if (!payload.accountName || !String(payload.accountName).trim()) {
-          return jsonOutput({ success: false, error: 'Account name is required. Please verify your account before requesting withdrawal.' });
-        }
-
         var user = getSheetRows('Users').find(function(u) { return u.userId === payload.userId; });
-        var sbList = getSheetRows('SalesBalances');
-        var sBalance = sbList.find(function(w) { return w.userId === payload.userId; });
         var amt = Number(payload.amount);
-
         if (isNaN(amt) || amt <= 0) {
           return jsonOutput({ success: false, error: 'Withdrawal amount must be a positive number.' });
         }
-        if (!sBalance || (Number(sBalance.availableBalance) || 0) < amt) {
+
+        var sBalance = getOrCreateSalesBalance(payload.userId);
+        if ((Number(sBalance.availableBalance) || 0) < amt) {
           return jsonOutput({
             success: false,
             error: 'Insufficient available sales balance. Pending sales cannot be withdrawn, and buyer wallet funds cannot be withdrawn.'
@@ -2555,36 +2902,48 @@ function doPost(e) {
 
         var now = new Date().toISOString();
         var reqId = 'wdr_' + Utilities.getUuid().substr(0, 8);
-        var ref = 'WD-' + Math.floor(100000 + Math.random() * 900000);
+        var ref = 'WD-' + Utilities.getUuid().replace(/-/g, '').substr(0, 12).toUpperCase();
+
+        // Account name is optional on the user side (no Paystack verification required
+        // to submit). It is resolved/confirmed later during admin-approved payout.
+        var providedName = payload.accountName ? String(payload.accountName).trim() : '';
 
         var req = {
           requestId: reqId,
           userId: payload.userId,
           userName: user ? user.fullName : '',
+          userRegNumber: user ? (user.regNumber || user.matricNumber || '') : '',
           userEmail: user ? user.schoolEmail : '',
           amount: amt,
           bankName: matchedBank.name,
           bankCode: matchedBank.code,
           accountNumber: acc,
-          accountName: String(payload.accountName).trim(),
+          accountName: providedName || (user ? user.fullName : ''),
           status: 'pending',
           reference: ref,
           paystackRecipientCode: '',
           paystackTransferCode: '',
           paystackStatus: '',
+          paymentMethod: '',
+          adminId: '',
+          manualConfirmedBy: '',
+          manualConfirmedAt: '',
+          rejectionReason: '',
+          failureReason: '',
           adminNotes: '',
           processedAt: '',
-          createdAt: now
+          completedAt: '',
+          createdAt: now,
+          updatedAt: now
         };
 
         appendSheetRow('WithdrawalRequests', req);
 
-        // Reserve funds immediately by deducting availableBalance to prevent double-spending
-        var newAvail = Number(((Number(sBalance.availableBalance) || 0) - amt).toFixed(2));
-        updateSheetRow('SalesBalances', 'userId', payload.userId, {
-          availableBalance: newAvail,
-          updatedAt: now
-        });
+        // Reserve funds: move amount from availableBalance into reservedBalance.
+        var reserveRes = reserveWithdrawalFunds(payload.userId, amt);
+        if (!reserveRes.success) {
+          return jsonOutput({ success: false, error: reserveRes.error || 'Could not reserve withdrawal funds.' });
+        }
 
         // Record in central Transactions ledger
         logFinancialTransaction({
@@ -2597,8 +2956,8 @@ function doPost(e) {
           paymentProvider: 'paystack',
           eBronStatus: 'pending',
           paystackStatus: 'pending',
-          statusHistory: [{ status: 'pending', timestamp: now, reason: 'Withdrawal request created and funds reserved' }],
-          verificationDetails: JSON.stringify({ bankName: matchedBank.name, bankCode: matchedBank.code, accountNumber: acc, accountName: payload.accountName })
+          statusHistory: [{ status: 'pending', timestamp: now, reason: 'Withdrawal request submitted and funds reserved (awaiting admin approval)' }],
+          verificationDetails: JSON.stringify({ bankName: matchedBank.name, bankCode: matchedBank.code, accountNumber: acc, reserved: true })
         });
 
         // Notify administrator
@@ -2617,7 +2976,7 @@ function doPost(e) {
         createNotification(
           payload.userId,
           'Withdrawal Request Submitted (' + ref + ')',
-          'Your payout request for ₦' + amt.toLocaleString() + ' has been submitted and is awaiting administrator approval.',
+          'Your withdrawal request for ₦' + amt.toLocaleString() + ' has been submitted successfully and is awaiting admin approval.',
           'sales',
           '/sell/sales-balance'
         );
@@ -2628,7 +2987,96 @@ function doPost(e) {
       }
     }
 
-    // 15. PROCESS WITHDRAWAL THROUGH PAYSTACK (Admin)
+    // 14b. CANCEL WITHDRAWAL (User) — allowed only BEFORE payment processing begins
+    if (action === 'cancelWithdrawal') {
+      var cLock = LockService.getScriptLock();
+      var hasCLock = false;
+      try { hasCLock = cLock.tryLock(15000); } catch (e) {}
+      if (!hasCLock) {
+        return jsonOutput({ success: false, error: 'Server is currently busy processing another transaction. Please wait a moment.' });
+      }
+
+      try {
+        var cReq = getSheetRows('WithdrawalRequests').find(function(r) { return r.requestId === payload.requestId; });
+        if (!cReq) return jsonOutput({ success: false, error: 'Withdrawal request not found.' });
+        if (cReq.userId !== payload.userId) return jsonOutput({ success: false, error: 'Unauthorized.' });
+
+        var cSt = String(cReq.status || '').toLowerCase();
+        if (cSt === 'cancelled') {
+          return jsonOutput({ success: true, alreadyCancelled: true, message: 'This withdrawal request has already been cancelled.' });
+        }
+        if (cSt === 'successful' || cSt === 'processed') {
+          return jsonOutput({ success: false, error: 'This withdrawal has already been paid out and cannot be cancelled.' });
+        }
+        if (cSt === 'rejected' || cSt === 'reversed') {
+          return jsonOutput({ success: false, error: 'This withdrawal is already closed and cannot be cancelled.' });
+        }
+        // A transfer that has entered processing (or a failed Paystack attempt that produced a
+        // transfer code) must never be cancelled automatically — support must handle it.
+        if (cSt === 'processing' || (cSt === 'failed' && cReq.paystackTransferCode)) {
+          return jsonOutput({ success: false, error: 'This withdrawal is already being processed and cannot be cancelled. Please contact support.' });
+        }
+        if (cSt !== 'pending' && cSt !== 'failed') {
+          return jsonOutput({ success: false, error: 'This withdrawal cannot be cancelled in its current state.' });
+        }
+
+        var cAmt = Number(cReq.amount) || 0;
+        var cNow = new Date().toISOString();
+        var cReason = payload.reason ? String(payload.reason).trim() : 'Cancelled by user.';
+
+        // Release the reservation back to the seller's available balance (guarded: only once,
+        // because the status check above ensures we only reach here for a cancellable request).
+        releaseWithdrawalReservation(cReq.userId, cAmt);
+
+        updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
+          status: 'cancelled',
+          failureReason: cReason,
+          adminNotes: (cReq.adminNotes ? cReq.adminNotes + ' | ' : '') + 'Cancelled by user: ' + cReason,
+          processedAt: cNow,
+          updatedAt: cNow
+        });
+
+        logFinancialTransaction({
+          reference: cReq.reference || cReq.requestId,
+          userId: cReq.userId,
+          sellerId: cReq.userId,
+          type: 'withdrawal_cancelled',
+          amount: cAmt,
+          paymentMethod: cReq.paymentMethod || 'bank_transfer',
+          paymentProvider: cReq.paymentMethod === 'manual_bank_transfer' ? 'ebron' : 'paystack',
+          eBronStatus: 'cancelled',
+          paystackStatus: 'cancelled',
+          statusHistory: [{ status: 'cancelled', timestamp: cNow, reason: cReason + ' Reserved funds released.' }],
+          verificationDetails: JSON.stringify({ cancelledBy: payload.userId, reason: cReason })
+        });
+
+        createNotification(
+          cReq.userId,
+          'Withdrawal Request Cancelled (' + (cReq.reference || cReq.requestId) + ')',
+          'Your withdrawal request of ₦' + cAmt.toLocaleString() + ' was cancelled. The reserved funds have been returned to your available sales balance.',
+          'sales',
+          '/sell/sales-balance'
+        );
+
+        // Notify administrators so the request is no longer treated as pending approval.
+        var cAdmins = getSheetRows('Users').filter(function(u) { return u.role === 'admin'; });
+        cAdmins.forEach(function(adm) {
+          createNotification(
+            adm.userId,
+            'Withdrawal Cancelled (' + (cReq.reference || cReq.requestId) + ')',
+            (cReq.userName || cReq.userId) + ' cancelled their withdrawal request of ₦' + cAmt.toLocaleString() + '. No payout is required.',
+            'admin',
+            '/admin'
+          );
+        });
+
+        return jsonOutput({ success: true, message: 'Withdrawal request cancelled and reserved funds released.' });
+      } finally {
+        try { cLock.releaseLock(); } catch (e) {}
+      }
+    }
+
+    // 15. PROCESS WITHDRAWAL (Admin) — approve triggers Paystack, reject releases funds
     if (action === 'processWithdrawal') {
       var lock = LockService.getScriptLock();
       var hasLock = false;
@@ -2642,155 +3090,186 @@ function doPost(e) {
       try {
         var wReq = getSheetRows('WithdrawalRequests').find(function(r) { return r.requestId === payload.requestId; });
         if (!wReq) return jsonOutput({ success: false, error: 'Request not found' });
-        if (wReq.status === 'successful' || wReq.status === 'processed') {
-          return jsonOutput({ success: false, error: 'This withdrawal has already been successfully processed.' });
-        }
-        if (wReq.status === 'rejected') {
-          return jsonOutput({ success: false, error: 'This withdrawal has already been rejected.' });
-        }
 
         var now = new Date().toISOString();
-        var decision = payload.decision; // 'approve' | 'reject'
+        // Normalise the decision (frontend may send 'approved'/'rejected' or 'approve'/'reject').
+        var rawDecision = String(payload.decision || '').toLowerCase();
+        var isApprove = (rawDecision === 'approve' || rawDecision === 'approved' || rawDecision === 'process' || rawDecision === 'processed');
+        var isReject = (rawDecision === 'reject' || rawDecision === 'rejected');
         var adminNotes = payload.adminNotes ? String(payload.adminNotes).trim() : '';
         var amt = Number(wReq.amount);
+        var adminId = payload.adminId || '';
+        var st = String(wReq.status || '').toLowerCase();
 
-        var sb = getSheetRows('SalesBalances').find(function(item) { return item.userId === wReq.userId; });
+        if (isApprove) {
+          var method = String(payload.method || 'paystack').toLowerCase();
+          if (method === 'manual') method = 'manual_bank_transfer';
+          var isManual = (method === 'manual_bank_transfer');
+          if (method !== 'paystack' && !isManual) {
+            return jsonOutput({ success: false, error: 'Unknown payment method: ' + payload.method });
+          }
 
-        if (decision === 'approve' || decision === 'process') {
-          // Execute real Paystack Transfer
-          var transferResult = executePaystackTransfer(
-            amt,
-            wReq.bankCode,
-            wReq.accountNumber,
-            wReq.accountName,
-            wReq.reference || wReq.requestId,
-            'eBron Sales Payout for ' + (wReq.userName || wReq.userId)
-          );
-
-          if (transferResult.success) {
-            // Finalize withdrawal as successful
-            updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
-              status: 'successful',
-              paystackRecipientCode: transferResult.recipientCode || '',
-              paystackTransferCode: transferResult.transferCode || '',
-              paystackStatus: transferResult.transferStatus || 'success',
-              adminNotes: adminNotes || transferResult.message,
-              processedAt: now
-            });
-
-            if (sb) {
-              var newTotalW = Number(((Number(sb.totalWithdrawals) || 0) + amt).toFixed(2));
-              updateSheetRow('SalesBalances', 'userId', wReq.userId, {
-                totalWithdrawals: newTotalW,
-                updatedAt: now
-              });
+          if (isManual) {
+            // ===== MANUAL BANK TRANSFER =====
+            // Funded/paid outside Paystack. The admin must explicitly confirm success or report a failure.
+            if (st === 'successful' || st === 'processed') {
+              return jsonOutput({ success: false, error: 'This withdrawal has already been paid out.' });
+            }
+            if (st === 'rejected' || st === 'cancelled' || st === 'reversed') {
+              return jsonOutput({ success: false, error: 'This withdrawal is closed (' + wReq.status + ') and cannot be processed.' });
+            }
+            // Prevent switching payment methods while a Paystack transfer is in flight.
+            if (st === 'processing' && wReq.paystackTransferCode) {
+              return jsonOutput({ success: false, error: 'A Paystack transfer is already in progress for this request and cannot be switched to a manual transfer.' });
+            }
+            if (st !== 'pending' && st !== 'failed') {
+              return jsonOutput({ success: false, error: 'Request is not in a processable state (' + wReq.status + ').' });
             }
 
-            // Record in SalesTransactions
-            appendSheetRow('SalesTransactions', {
-              transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
-              sellerId: wReq.userId,
-              orderId: '',
-              orderReference: wReq.reference || wReq.requestId,
-              amount: amt,
-              type: 'withdrawal',
-              status: 'completed',
-              createdAt: now
-            });
+            var manualAction = String(payload.manualAction || '').toLowerCase();
 
-            // Update central Transactions ledger
-            logFinancialTransaction({
-              reference: wReq.reference || wReq.requestId,
-              userId: wReq.userId,
-              sellerId: wReq.userId,
-              type: 'withdrawal',
-              amount: amt,
-              paymentMethod: 'bank_transfer',
-              paymentProvider: 'paystack',
-              eBronStatus: 'completed',
-              paystackStatus: transferResult.transferStatus || 'success',
-              statusHistory: [{ status: 'completed', timestamp: now, reason: 'Paystack transfer executed successfully' }],
-              verificationDetails: JSON.stringify(transferResult)
-            });
+            if (manualAction === 'confirmed' || manualAction === 'success' || manualAction === 'successful') {
+              // Finalize the reservation exactly once. Marked Successful ONLY on explicit admin confirmation.
+              finalizeWithdrawalReservation(wReq.userId, amt);
 
-            createNotification(
-              wReq.userId,
-              'Withdrawal Successful (' + (wReq.reference || wReq.requestId) + ')',
-              'Your bank payout of ₦' + amt.toLocaleString() + ' was successfully transferred to ' + wReq.bankName + ' (' + wReq.accountNumber + ').',
-              'sales',
-              '/sell/sales-balance'
-            );
+              updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
+                status: 'successful',
+                paymentMethod: 'manual_bank_transfer',
+                adminId: adminId || wReq.adminId || '',
+                manualConfirmedBy: adminId || wReq.manualConfirmedBy || '',
+                manualConfirmedAt: now,
+                processedAt: now,
+                completedAt: now,
+                updatedAt: now
+              });
 
+              appendSheetRow('SalesTransactions', {
+                transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
+                sellerId: wReq.userId,
+                orderId: '',
+                orderReference: wReq.reference || wReq.requestId,
+                amount: amt,
+                type: 'withdrawal',
+                status: 'completed',
+                createdAt: now
+              });
+
+              logFinancialTransaction({
+                reference: wReq.reference || wReq.requestId,
+                userId: wReq.userId,
+                sellerId: wReq.userId,
+                type: 'withdrawal',
+                amount: amt,
+                paymentMethod: 'manual_bank_transfer',
+                paymentProvider: 'ebron',
+                eBronStatus: 'completed',
+                paystackStatus: 'none',
+                statusHistory: [{ status: 'completed', timestamp: now, reason: 'Manual bank transfer confirmed by admin ' + (adminId || 'n/a') }],
+                verificationDetails: JSON.stringify({ method: 'manual_bank_transfer', confirmedBy: adminId || '' })
+              });
+
+              createNotification(
+                wReq.userId,
+                'Withdrawal Completed (' + (wReq.reference || wReq.requestId) + ')',
+                'Your withdrawal of ₦' + amt.toLocaleString() + ' has been paid to ' + wReq.bankName + ' (' + wReq.accountNumber + ') via bank transfer.',
+                'sales',
+                '/sell/sales-balance'
+              );
+
+              return jsonOutput({ success: true, message: 'Manual bank transfer recorded. Withdrawal marked successful.' });
+            }
+
+            if (manualAction === 'failed' || manualAction === 'fail') {
+              var failReason = payload.failureReason ? String(payload.failureReason).trim() : '';
+              if (!failReason) {
+                return jsonOutput({ success: false, error: 'A failure explanation is required.' });
+              }
+
+              // Payment was not made: release the reservation back to the seller's available balance.
+              releaseWithdrawalReservation(wReq.userId, amt);
+
+              updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
+                status: 'failed',
+                paymentMethod: 'manual_bank_transfer',
+                adminId: adminId || wReq.adminId || '',
+                failureReason: failReason,
+                adminNotes: 'Manual transfer failed: ' + failReason + '. Reserved funds released.',
+                processedAt: now,
+                updatedAt: now
+              });
+
+              logFinancialTransaction({
+                reference: wReq.reference || wReq.requestId,
+                userId: wReq.userId,
+                sellerId: wReq.userId,
+                type: 'withdrawal_failed',
+                amount: amt,
+                paymentMethod: 'manual_bank_transfer',
+                paymentProvider: 'ebron',
+                eBronStatus: 'failed',
+                paystackStatus: 'none',
+                errorMessage: failReason,
+                statusHistory: [{ status: 'failed', timestamp: now, reason: 'Manual transfer failed: ' + failReason + '. Reserved funds released.' }],
+                verificationDetails: JSON.stringify({ method: 'manual_bank_transfer', failureReason: failReason })
+              });
+
+              createNotification(
+                wReq.userId,
+                'Withdrawal Could Not Be Completed',
+                'Your withdrawal of ₦' + amt.toLocaleString() + ' could not be completed. Reason: ' + failReason + '. The reserved funds have been returned to your available sales balance.',
+                'sales',
+                '/sell/sales-balance'
+              );
+
+              return jsonOutput({ success: true, message: 'Manual transfer marked as failed and reserved funds released.' });
+            }
+
+            return jsonOutput({ success: false, error: 'Select a manual transfer outcome ("I Have Transferred" or "Transfer Failed").' });
+          }
+
+          // ===== PAYSTACK TRANSFER =====
+          // Delegate to the shared single-request approval workflow (also used by Approve All).
+          var result = processSingleWithdrawalApproval(payload.requestId, adminId);
+          if (result.success) {
             return jsonOutput({
               success: true,
-              message: 'Paystack transfer successful! Reference: ' + (wReq.reference || wReq.requestId),
-              transferCode: transferResult.transferCode
-            });
-          } else {
-            // Paystack failed: restore seller available balance safely
-            if (sb) {
-              var restoredAvail = Number(((Number(sb.availableBalance) || 0) + amt).toFixed(2));
-              updateSheetRow('SalesBalances', 'userId', wReq.userId, {
-                availableBalance: restoredAvail,
-                updatedAt: now
-              });
-            }
-
-            updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
-              status: 'failed',
-              paystackStatus: 'failed',
-              adminNotes: 'Transfer failed: ' + (transferResult.error || 'Gateway error') + '. Funds restored to available balance.',
-              processedAt: now
-            });
-
-            // Update central Transactions ledger
-            logFinancialTransaction({
-              reference: wReq.reference || wReq.requestId,
-              userId: wReq.userId,
-              sellerId: wReq.userId,
-              type: 'withdrawal',
-              amount: amt,
-              paymentMethod: 'bank_transfer',
-              paymentProvider: 'paystack',
-              eBronStatus: 'failed',
-              paystackStatus: 'failed',
-              errorMessage: transferResult.error || 'Gateway transfer error',
-              statusHistory: [{ status: 'failed', timestamp: now, reason: transferResult.error || 'Gateway transfer error' }],
-              verificationDetails: JSON.stringify(transferResult)
-            });
-
-            createNotification(
-              wReq.userId,
-              'Withdrawal Transfer Failed',
-              'Your payout transfer failed (' + (transferResult.error || 'Gateway error') + '). The funds of ₦' + amt.toLocaleString() + ' have been restored to your available sales balance.',
-              'sales',
-              '/sell/sales-balance'
-            );
-
-            return jsonOutput({
-              success: false,
-              error: 'Paystack transfer failed: ' + transferResult.error + '. Funds restored to seller balance.',
-              status: 'failed'
+              message: 'Paystack transfer successful! Reference: ' + (result.reference || payload.requestId),
+              transferCode: result.transferCode || ''
             });
           }
+          if (result.status === 'skipped') {
+            return jsonOutput({ success: false, error: result.error || 'This request cannot be approved.', status: 'skipped' });
+          }
+          return jsonOutput({
+            success: false,
+            error: 'Paystack transfer failed: ' + (result.error || 'Gateway error') + '. Funds remain reserved for retry.',
+            status: 'failed'
+          });
         }
 
-        if (decision === 'reject') {
-          if (sb) {
-            var restoredAvailReject = Number(((Number(sb.availableBalance) || 0) + amt).toFixed(2));
-            updateSheetRow('SalesBalances', 'userId', wReq.userId, {
-              availableBalance: restoredAvailReject,
-              updatedAt: now
-            });
+        if (isReject) {
+          if (st === 'successful' || st === 'processed' || st === 'reversed') {
+            return jsonOutput({ success: false, error: 'This withdrawal has already been finalized and cannot be rejected.' });
           }
+          if (st === 'rejected') {
+            return jsonOutput({ success: false, error: 'This withdrawal has already been rejected.' });
+          }
+          if (st === 'cancelled') {
+            return jsonOutput({ success: false, error: 'This withdrawal has already been cancelled.' });
+          }
+
+          // Release the reserved funds back to the seller's available balance.
+          releaseWithdrawalReservation(wReq.userId, amt);
 
           updateSheetRow('WithdrawalRequests', 'requestId', payload.requestId, {
             status: 'rejected',
-            adminNotes: adminNotes || 'Withdrawal request rejected by administrator. Funds refunded.',
-            processedAt: now
+            adminId: adminId || wReq.adminId || '',
+            rejectionReason: adminNotes || 'Withdrawal request rejected by administrator.',
+            adminNotes: adminNotes || 'Withdrawal request rejected by administrator. Funds released.',
+            processedAt: now,
+            updatedAt: now
           });
 
-          // Update central Transactions ledger
           logFinancialTransaction({
             reference: wReq.reference || wReq.requestId,
             userId: wReq.userId,
@@ -2801,22 +3280,22 @@ function doPost(e) {
             paymentProvider: 'paystack',
             eBronStatus: 'rejected',
             paystackStatus: 'cancelled',
-            statusHistory: [{ status: 'rejected', timestamp: now, reason: adminNotes || 'Rejected by administrator. Funds restored.' }],
+            statusHistory: [{ status: 'rejected', timestamp: now, reason: adminNotes || 'Rejected by administrator. Reserved funds released.' }],
             verificationDetails: JSON.stringify({ adminNotes: adminNotes })
           });
 
           createNotification(
             wReq.userId,
             'Withdrawal Request Rejected',
-            'Your withdrawal request for ₦' + amt.toLocaleString() + ' was rejected. The funds have been returned to your available sales balance. ' + (adminNotes ? 'Reason: ' + adminNotes : ''),
+            'Your withdrawal request for ₦' + amt.toLocaleString() + ' was rejected. The reserved funds have been returned to your available sales balance. ' + (adminNotes ? 'Reason: ' + adminNotes : ''),
             'sales',
             '/sell/sales-balance'
           );
 
-          return jsonOutput({ success: true, message: 'Withdrawal request rejected and funds returned to seller.' });
+          return jsonOutput({ success: true, message: 'Withdrawal request rejected and reserved funds released.' });
         }
 
-        return jsonOutput({ success: false, error: 'Unknown decision: ' + decision });
+        return jsonOutput({ success: false, error: 'Unknown decision: ' + payload.decision });
       } finally {
         try { lock.releaseLock(); } catch (e) {}
       }
@@ -2824,142 +3303,72 @@ function doPost(e) {
 
     // 15b. BULK PROCESS WITHDRAWALS (Admin "Approve All")
     if (action === 'bulkProcessWithdrawals') {
-      var allWdr = getSheetRows('WithdrawalRequests');
-      var pendingWdr = allWdr.filter(function(r) { return r.status === 'pending'; });
-
-      if (Array.isArray(payload.requestIds) && payload.requestIds.length > 0) {
-        pendingWdr = pendingWdr.filter(function(r) { return payload.requestIds.indexOf(r.requestId) !== -1; });
+      var lock = LockService.getScriptLock();
+      var hasLock = false;
+      try {
+        hasLock = lock.tryLock(30000);
+      } catch (e) {}
+      if (!hasLock) {
+        return jsonOutput({ success: false, error: 'Server is currently busy processing another transaction. Please wait a moment.' });
       }
 
-      var results = {
-        total: pendingWdr.length,
-        successful: 0,
-        failed: 0,
-        skipped: 0,
-        details: []
-      };
+      try {
+        var adminId = payload.adminId || '';
+        // Only Pending Approval requests are eligible for bulk processing.
+        var pendingWdr = getSheetRows('WithdrawalRequests').filter(function(r) {
+          return String(r.status || '').toLowerCase() === 'pending';
+        });
 
-      for (var bIdx = 0; bIdx < pendingWdr.length; bIdx++) {
-        var curReq = pendingWdr[bIdx];
-        try {
-          var freshReq = getSheetRows('WithdrawalRequests').find(function(r) { return r.requestId === curReq.requestId; });
-          if (!freshReq || freshReq.status !== 'pending') {
-            results.skipped++;
-            results.details.push({ requestId: curReq.requestId, status: 'skipped', reason: 'Not in pending status' });
-            continue;
-          }
-
-          var amt = Number(freshReq.amount);
-          var now = new Date().toISOString();
-          var sb = getSheetRows('SalesBalances').find(function(item) { return item.userId === freshReq.userId; });
-
-          var trfRes = executePaystackTransfer(
-            amt,
-            freshReq.bankCode,
-            freshReq.accountNumber,
-            freshReq.accountName,
-            freshReq.reference || freshReq.requestId,
-            'eBron Sales Payout for ' + (freshReq.userName || freshReq.userId)
-          );
-
-          if (trfRes.success) {
-            updateSheetRow('WithdrawalRequests', 'requestId', freshReq.requestId, {
-              status: 'successful',
-              paystackRecipientCode: trfRes.recipientCode || '',
-              paystackTransferCode: trfRes.transferCode || '',
-              paystackStatus: trfRes.transferStatus || 'success',
-              adminNotes: 'Bulk approval: ' + (trfRes.message || 'Success'),
-              processedAt: now
-            });
-
-            if (sb) {
-              var newTotalW = Number(((Number(sb.totalWithdrawals) || 0) + amt).toFixed(2));
-              updateSheetRow('SalesBalances', 'userId', freshReq.userId, {
-                totalWithdrawals: newTotalW,
-                updatedAt: now
-              });
-            }
-
-            appendSheetRow('SalesTransactions', {
-              transactionId: 'stx_' + Utilities.getUuid().substr(0, 8),
-              sellerId: freshReq.userId,
-              orderId: '',
-              orderReference: freshReq.reference || freshReq.requestId,
-              amount: amt,
-              type: 'withdrawal',
-              status: 'completed',
-              createdAt: now
-            });
-
-            logFinancialTransaction({
-              reference: freshReq.reference || freshReq.requestId,
-              userId: freshReq.userId,
-              sellerId: freshReq.userId,
-              type: 'withdrawal',
-              amount: amt,
-              paymentMethod: 'bank_transfer',
-              paymentProvider: 'paystack',
-              eBronStatus: 'completed',
-              paystackStatus: trfRes.transferStatus || 'success',
-              statusHistory: [{ status: 'completed', timestamp: now, reason: 'Bulk Paystack transfer processed' }],
-              verificationDetails: JSON.stringify(trfRes)
-            });
-
-            createNotification(
-              freshReq.userId,
-              'Withdrawal Successful (' + (freshReq.reference || freshReq.requestId) + ')',
-              'Your bank payout of ₦' + amt.toLocaleString() + ' was successfully transferred to ' + freshReq.bankName + ' (' + freshReq.accountNumber + ').',
-              'sales',
-              '/sell/sales-balance'
-            );
-
-            results.successful++;
-            results.details.push({ requestId: freshReq.requestId, status: 'successful', reference: freshReq.reference });
-          } else {
-            if (sb) {
-              var restoredAvail = Number(((Number(sb.availableBalance) || 0) + amt).toFixed(2));
-              updateSheetRow('SalesBalances', 'userId', freshReq.userId, {
-                availableBalance: restoredAvail,
-                updatedAt: now
-              });
-            }
-
-            updateSheetRow('WithdrawalRequests', 'requestId', freshReq.requestId, {
-              status: 'failed',
-              paystackStatus: 'failed',
-              adminNotes: 'Bulk transfer failed: ' + (trfRes.error || 'Gateway error') + '. Funds restored.',
-              processedAt: now
-            });
-
-            logFinancialTransaction({
-              reference: freshReq.reference || freshReq.requestId,
-              userId: freshReq.userId,
-              sellerId: freshReq.userId,
-              type: 'withdrawal',
-              amount: amt,
-              paymentMethod: 'bank_transfer',
-              paymentProvider: 'paystack',
-              eBronStatus: 'failed',
-              paystackStatus: 'failed',
-              errorMessage: trfRes.error || 'Gateway transfer error',
-              statusHistory: [{ status: 'failed', timestamp: now, reason: trfRes.error || 'Gateway transfer error' }],
-              verificationDetails: JSON.stringify(trfRes)
-            });
-
-            results.failed++;
-            results.details.push({ requestId: freshReq.requestId, status: 'failed', error: trfRes.error });
-          }
-        } catch (itemErr) {
-          results.failed++;
-          results.details.push({ requestId: curReq.requestId, status: 'failed', error: itemErr.message });
+        if (Array.isArray(payload.requestIds) && payload.requestIds.length > 0) {
+          pendingWdr = pendingWdr.filter(function(r) { return payload.requestIds.indexOf(r.requestId) !== -1; });
         }
-      }
 
-      return jsonOutput({
-        success: true,
-        summary: results,
-        message: 'Processed ' + results.total + ' withdrawals: ' + results.successful + ' successful, ' + results.failed + ' failed, ' + results.skipped + ' skipped.'
-      });
+        var results = {
+          total: pendingWdr.length,
+          successful: 0,
+          failed: 0,
+          skipped: 0,
+          details: []
+        };
+
+        for (var bIdx = 0; bIdx < pendingWdr.length; bIdx++) {
+          var curReq = pendingWdr[bIdx];
+          try {
+            // Re-read the freshest record; each request is validated independently.
+            var freshReq = getSheetRows('WithdrawalRequests').find(function(r) { return r.requestId === curReq.requestId; });
+            if (!freshReq || String(freshReq.status || '').toLowerCase() !== 'pending') {
+              results.skipped++;
+              results.details.push({ requestId: curReq.requestId, status: 'skipped', reason: 'Not in Pending Approval status' });
+              continue;
+            }
+
+            // Reuse the exact same approval workflow as individual approvals.
+            var outcome = processSingleWithdrawalApproval(curReq.requestId, adminId);
+            if (outcome.success) {
+              results.successful++;
+              results.details.push({ requestId: curReq.requestId, status: 'successful', reference: outcome.reference });
+            } else if (outcome.status === 'skipped') {
+              results.skipped++;
+              results.details.push({ requestId: curReq.requestId, status: 'skipped', reason: outcome.error });
+            } else {
+              // Transfer failed for this request only — continue processing the rest.
+              results.failed++;
+              results.details.push({ requestId: curReq.requestId, status: 'failed', error: outcome.error });
+            }
+          } catch (itemErr) {
+            results.failed++;
+            results.details.push({ requestId: curReq.requestId, status: 'failed', error: itemErr.message });
+          }
+        }
+
+        return jsonOutput({
+          success: true,
+          summary: results,
+          message: 'Processed ' + results.total + ' withdrawals: ' + results.successful + ' successful, ' + results.failed + ' failed, ' + results.skipped + ' skipped.'
+        });
+      } finally {
+        try { lock.releaseLock(); } catch (e) {}
+      }
     }
 
     // 15c. RECONCILE TRANSACTION (Admin)
@@ -2985,13 +3394,11 @@ function doPost(e) {
           return jsonOutput({ success: true, message: 'Transaction is already completed.', transaction: tx });
         }
 
-        var paystackCheck = verifyPaystackTransaction(ref);
-        if (!paystackCheck.success) {
-          return jsonOutput({ success: false, error: 'Cannot reconcile: Paystack does not report this transaction as successful (' + (paystackCheck.error || 'Unverified') + ').' });
-        }
-
         var now = new Date().toISOString();
-        var amt = Number(tx.amount) || (paystackCheck.data ? Number(paystackCheck.data.amount) / 100 : 0);
+        var amt = Number(tx.amount) || 0;
+        if (amt <= 0) {
+          return jsonOutput({ success: false, error: 'Cannot reconcile: transaction amount is missing from the ledger.' });
+        }
 
         if (tx.userId) {
           var allWallets = getSheetRows('Wallets');
@@ -3046,7 +3453,7 @@ function doPost(e) {
           paystackStatus: 'success',
           statusHistory: [{ status: 'completed', timestamp: now, reason: 'Reconciled by administrator: missing wallet credit completed.' }],
           errorMessage: '',
-          verificationDetails: JSON.stringify(paystackCheck.data || {})
+          verificationDetails: null
         });
 
         return jsonOutput({
@@ -3312,6 +3719,93 @@ function doPost(e) {
       });
 
       return jsonOutput({ success: true, message: 'Product removed from marketplace successfully.' });
+    }
+
+    // 20. SUBMIT FEEDBACK (Guidelines & Safety page)
+    if (action === 'submitFeedback') {
+      var fbUserId = payload.userId;
+      if (!fbUserId) {
+        return jsonOutput({ success: false, error: 'You must be signed in to submit feedback.' });
+      }
+
+      var validTypes = ['Issue/Problem', 'Suggestion', 'Positive Feedback', 'General Feedback'];
+      var fbType = payload.type;
+      if (!fbType || validTypes.indexOf(fbType) === -1) {
+        return jsonOutput({ success: false, error: 'Please select a valid feedback type.' });
+      }
+
+      var fbMessage = payload.message ? String(payload.message).trim() : '';
+      if (!fbMessage) {
+        return jsonOutput({ success: false, error: 'Please enter your feedback message.' });
+      }
+
+      var fbSubject = payload.subject ? String(payload.subject).trim() : '';
+      if (!fbSubject) {
+        fbSubject = fbType;
+      }
+
+      var fbUser = getSheetRows('Users').find(function(u) { return u.userId === fbUserId; });
+      var now = new Date().toISOString();
+      var feedbackId = 'fb_' + Utilities.getUuid().substr(0, 8);
+
+      var newFeedback = {
+        feedbackId: feedbackId,
+        userId: fbUserId,
+        userName: payload.userName || (fbUser ? fbUser.fullName : ''),
+        userEmail: payload.userEmail || (fbUser ? fbUser.schoolEmail : ''),
+        type: fbType,
+        subject: fbSubject,
+        message: fbMessage,
+        status: 'New',
+        adminNotes: '',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      appendSheetRow('Feedback', newFeedback);
+
+      // Notify administrators of new feedback
+      var fbAdmins = getSheetRows('Users').filter(function(u) { return u.role === 'admin'; });
+      fbAdmins.forEach(function(adm) {
+        createNotification(
+          adm.userId,
+          'New User Feedback (' + fbType + ')',
+          newFeedback.userName + ' submitted ' + fbType + ': "' + fbSubject + '".',
+          'admin',
+          '/admin'
+        );
+      });
+
+      return jsonOutput({
+        success: true,
+        feedback: newFeedback,
+        message: 'Thank you! Your feedback has been submitted successfully.'
+      });
+    }
+
+    // 21. UPDATE FEEDBACK STATUS / ADMIN NOTES (Admin)
+    if (action === 'updateFeedbackStatus') {
+      var fbId = payload.feedbackId;
+      if (!fbId) return jsonOutput({ success: false, error: 'Feedback ID is required.' });
+
+      var validStatuses = ['New', 'Under Review', 'Resolved'];
+      var fbStatus = payload.status;
+      var fbUpdates = { updatedAt: new Date().toISOString() };
+
+      if (fbStatus !== undefined && fbStatus !== null && fbStatus !== '') {
+        if (validStatuses.indexOf(fbStatus) === -1) {
+          return jsonOutput({ success: false, error: 'Invalid feedback status: ' + fbStatus });
+        }
+        fbUpdates.status = fbStatus;
+      }
+
+      if (payload.adminNotes !== undefined) {
+        fbUpdates.adminNotes = String(payload.adminNotes || '').trim();
+      }
+
+      var fbOk = updateSheetRow('Feedback', 'feedbackId', fbId, fbUpdates);
+      if (!fbOk) return jsonOutput({ success: false, error: 'Feedback record not found.' });
+      return jsonOutput({ success: true, message: 'Feedback updated successfully.' });
     }
 
     return jsonOutput({ success: false, error: 'Unknown POST action: ' + action });

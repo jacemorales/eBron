@@ -5,6 +5,7 @@ import type { Product, Gender, Hall, BuyerWallet } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { TopUpModal } from '../components/TopUpModal';
+import { getProductStock, isProductSoldOut } from '../utils/productUtils';
 
 const MALE_HALLS: Hall[] = ['Peter', 'John', 'Paul', 'Daniel', 'Joseph', 'Joshua'];
 const FEMALE_HALLS: Hall[] = ['Mary', 'Lydia', 'Deborah', 'Dorcas'];
@@ -42,7 +43,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
       api.getProductById(productId).then(p => {
         setProduct(p);
         if (p) {
-          const avail = p.availableStock !== undefined ? p.availableStock : 1;
+          const avail = getProductStock(p);
           const initialQ = parseInt(searchParams.get('qty') || '1') || 1;
           setQuantity(Math.min(avail > 0 ? avail : 1, Math.max(1, initialQ)));
         }
@@ -68,8 +69,8 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
 
   const availableBalance = Number(wallet?.availableBalance || 0);
   const unitPrice = Number(product?.price || 0);
-  const availableStock = product?.availableStock !== undefined ? product.availableStock : (product?.stockStatus === 'sold_out' ? 0 : 1);
-  const isSoldOut = availableStock <= 0 || product?.stockStatus === 'sold_out' || product?.availability !== 'available';
+  const availableStock = getProductStock(product);
+  const isSoldOut = isProductSoldOut(product) || product?.availability === 'reserved';
   const totalPrice = unitPrice * quantity;
   const deficit = Math.max(0, totalPrice - availableBalance);
   const hasSufficientBalance = availableBalance >= totalPrice && !isSoldOut;
@@ -77,7 +78,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
   const handlePay = async () => {
     if (!user || !product) return;
     if (isSoldOut) {
-      onToast('error', 'This product is sold out.');
+      onToast('error', product?.availability === 'reserved' ? 'This item is reserved.' : 'This product is sold out.');
       return;
     }
     if (quantity > availableStock) {
@@ -137,7 +138,7 @@ export const Checkout: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
                   <label className="block text-slate-600 mb-1">Full Name</label>
                   <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required className="w-full px-3 py-2 border rounded-lg" />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="block text-slate-600 mb-1">Gender</label>
                     <select value={gender} onChange={e => handleGenderChange(e.target.value as Gender)} className="w-full px-3 py-2 border rounded-lg bg-white">

@@ -97,7 +97,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">Reg Number *</label>
               <input
@@ -134,7 +134,7 @@ export const Register: React.FC<{ onToast: (type: 'success' | 'error' | 'info', 
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">Gender *</label>
               <select

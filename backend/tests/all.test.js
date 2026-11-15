@@ -28,7 +28,10 @@ import {
   releaseSellerPendingToAvailable,
   requestSalesWithdrawal,
   processWithdrawalTransfer,
+  cancelWithdrawalRequest,
+  processManualWithdrawal,
   SUPPORTED_WITHDRAWAL_BANKS,
+  WITHDRAWAL_PAYMENT_METHOD,
   validateWithdrawalBankAndAccount,
   recordFinancialTransaction,
   reconcileTransaction,
@@ -64,6 +67,18 @@ test('database schema includes separated wallets, merged chat/notification table
   assert.ok(SHEETS_SCHEMA.Transactions.includes('paystackStatus'));
 
   assert.ok(SHEETS_SCHEMA.Products.includes('stockNumber'));
+
+  // Withdrawal reservation model: SalesBalances tracks reserved funds separately.
+  assert.ok(SHEETS_SCHEMA.SalesBalances.includes('reservedBalance'));
+
+  // Dedicated withdrawal record captures the full admin-approval + Paystack lifecycle.
+  assert.ok(SHEETS_SCHEMA.WithdrawalRequests);
+  [
+    'requestId', 'userId', 'userName', 'userRegNumber', 'amount', 'bankName', 'bankCode',
+    'accountNumber', 'status', 'reference', 'paystackRecipientCode', 'paystackTransferCode',
+    'paymentMethod', 'manualConfirmedBy', 'manualConfirmedAt', 'failureReason',
+    'adminId', 'rejectionReason', 'processedAt', 'completedAt', 'createdAt', 'updatedAt'
+  ].forEach(col => assert.ok(SHEETS_SCHEMA.WithdrawalRequests.includes(col), `WithdrawalRequests missing ${col}`));
 });
 
 test('auth validates CU email', () => {
@@ -130,18 +145,19 @@ test('seller sales balance separates pending and available earnings', () => {
   assert.equal(salesBalance.availableBalance, 5000);
   assert.equal(salesBalance.totalEarnings, 5000);
 
-  // Now withdrawal should succeed
+  // Now withdrawal should succeed and RESERVE the funds (pending approval; not yet withdrawn)
   const withdrawalResult = requestSalesWithdrawal(salesBalance, {
     amount: 3000,
     bankName: 'Opay',
     bankCode: '999992',
-    accountNumber: '0123456789',
-    accountName: 'Seller Name'
+    accountNumber: '0123456789'
   });
   salesBalance = withdrawalResult.salesBalance;
   assert.equal(salesBalance.availableBalance, 2000);
-  assert.equal(salesBalance.totalWithdrawals, 3000);
+  assert.equal(salesBalance.reservedBalance, 3000);
+  assert.equal(salesBalance.totalWithdrawals, 0);
   assert.equal(withdrawalResult.withdrawalRequest.amount, 3000);
+  assert.equal(withdrawalResult.withdrawalRequest.status, 'pending');
 });
 
 test('order creation requires sufficient buyer wallet balance', () => {
@@ -312,21 +328,24 @@ test('stock tracking initializes quantity, decrements on purchase, and prevents 
   assert.equal(product.stockStatus, 'sold_out');
 });
 
-test('marketplace filtering excludes sold-out and unavailable products from public browse', () => {
+test('marketplace filtering excludes sold-out and unavailable products from public browse and includes legacy active products', () => {
   const products = [
     { productId: 'p1', availability: 'available', stockStatus: 'in_stock', availableStock: 2, status: 'active' },
     { productId: 'p2', availability: 'available', stockStatus: 'sold_out', availableStock: 0, status: 'active' },
     { productId: 'p3', availability: 'unavailable', stockStatus: 'in_stock', availableStock: 1, status: 'active' },
-    { productId: 'p4', availability: 'available', stockStatus: 'in_stock', availableStock: 1, status: 'deleted' }
+    { productId: 'p4', availability: 'available', stockStatus: 'in_stock', availableStock: 1, status: 'deleted' },
+    // Legacy product where stockStatus, availableStock, initialStock are empty strings
+    { productId: 'p5', availability: 'available', stockStatus: '', availableStock: '', initialStock: '', status: 'active' }
   ];
 
   const publicBrowse = filterProducts(products, { forPublic: true });
-  assert.equal(publicBrowse.length, 1);
+  assert.equal(publicBrowse.length, 2);
   assert.equal(publicBrowse[0].productId, 'p1');
+  assert.equal(publicBrowse[1].productId, 'p5');
 
   // Catalogue/admin can view all non-deleted products
   const adminBrowse = filterProducts(products, { forPublic: false, includeDeleted: true });
-  assert.equal(adminBrowse.length, 4);
+  assert.equal(adminBrowse.length, 5);
 });
 
 test('sales withdrawal reserves funds and handles Paystack transfer success, failure, and rejection', () => {
@@ -334,43 +353,96 @@ test('sales withdrawal reserves funds and handles Paystack transfer success, fai
   salesBalance.availableBalance = 15000;
   salesBalance.totalEarnings = 15000;
 
-  // Request withdrawal of 5000
+  // Request withdrawal of 5000 -> funds reserved (not yet withdrawn)
   const reqRes = requestSalesWithdrawal(salesBalance, {
     amount: 5000,
     bankName: 'Opay',
     bankCode: '999992',
-    accountNumber: '0123456789',
-    accountName: 'Seller Name'
+    accountNumber: '0123456789'
   });
   salesBalance = reqRes.salesBalance;
   assert.equal(salesBalance.availableBalance, 10000);
-  assert.equal(salesBalance.totalWithdrawals, 5000);
+  assert.equal(salesBalance.reservedBalance, 5000);
+  assert.equal(salesBalance.totalWithdrawals, 0);
   assert.equal(reqRes.withdrawalRequest.bankCode, '999992');
   assert.equal(reqRes.withdrawalRequest.status, 'pending');
 
-  // Transfer fails: funds are refunded back to seller's available balance
+  // Transfer fails: funds remain reserved (never lost) and the request is retryable
   const failTransfer = processWithdrawalTransfer(salesBalance, reqRes.withdrawalRequest, 'failed', 'Network timeout');
   salesBalance = failTransfer.salesBalance;
-  assert.equal(salesBalance.availableBalance, 15000);
+  assert.equal(salesBalance.availableBalance, 10000);
+  assert.equal(salesBalance.reservedBalance, 5000);
   assert.equal(salesBalance.totalWithdrawals, 0);
   assert.equal(failTransfer.withdrawalRequest.status, 'failed');
 
-  // Re-request withdrawal of 6000
+  // Safe retry of the SAME request succeeds: reservation finalized into withdrawn total
+  const retryTransfer = processWithdrawalTransfer(salesBalance, failTransfer.withdrawalRequest, 'successful');
+  salesBalance = retryTransfer.salesBalance;
+  assert.equal(retryTransfer.withdrawalRequest.status, 'successful');
+  assert.equal(salesBalance.availableBalance, 10000);
+  assert.equal(salesBalance.reservedBalance, 0);
+  assert.equal(salesBalance.totalWithdrawals, 5000);
+
+  // A new request that is rejected releases the reserved amount back to available
   const reqRes2 = requestSalesWithdrawal(salesBalance, {
-    amount: 6000,
+    amount: 3000,
     bankName: 'PalmPay',
     bankCode: '999991',
-    accountNumber: '0987654321',
-    accountName: 'Seller Name'
+    accountNumber: '0987654321'
   });
   salesBalance = reqRes2.salesBalance;
-  assert.equal(salesBalance.availableBalance, 9000);
-  assert.equal(salesBalance.totalWithdrawals, 6000);
+  assert.equal(salesBalance.availableBalance, 7000);
+  assert.equal(salesBalance.reservedBalance, 3000);
 
-  // Transfer succeeds: status marked successful
-  const successTransfer = processWithdrawalTransfer(salesBalance, reqRes2.withdrawalRequest, 'successful');
-  assert.equal(successTransfer.withdrawalRequest.status, 'successful');
-  assert.equal(successTransfer.salesBalance.availableBalance, 9000);
+  const rejectTransfer = processWithdrawalTransfer(salesBalance, reqRes2.withdrawalRequest, 'rejected', 'Bank details incorrect');
+  salesBalance = rejectTransfer.salesBalance;
+  assert.equal(rejectTransfer.withdrawalRequest.status, 'rejected');
+  assert.equal(rejectTransfer.withdrawalRequest.rejectionReason, 'Bank details incorrect');
+  assert.equal(salesBalance.availableBalance, 10000);
+  assert.equal(salesBalance.reservedBalance, 0);
+  assert.equal(salesBalance.totalWithdrawals, 5000);
+});
+
+test('withdrawal reservations prevent over-withdrawal and double-spending the same funds', () => {
+  let salesBalance = createInitialSalesBalance('seller_res');
+  salesBalance.availableBalance = 20000;
+  salesBalance.totalEarnings = 20000;
+
+  // First request reserves 8000 -> available drops to 12000
+  const r1 = requestSalesWithdrawal(salesBalance, {
+    amount: 8000, bankName: 'Opay', bankCode: '999992', accountNumber: '0123456789'
+  });
+  salesBalance = r1.salesBalance;
+  assert.equal(salesBalance.availableBalance, 12000);
+  assert.equal(salesBalance.reservedBalance, 8000);
+
+  // A second request exceeding the remaining available balance must fail
+  assert.throws(() => {
+    requestSalesWithdrawal(salesBalance, {
+      amount: 20000, bankName: 'Opay', bankCode: '999992', accountNumber: '0123456789'
+    });
+  }, /Insufficient available sales balance/);
+
+  // A second request within the remaining available balance succeeds
+  const r2 = requestSalesWithdrawal(salesBalance, {
+    amount: 12000, bankName: 'Moniepoint', bankCode: '50515', accountNumber: '9876543210'
+  });
+  salesBalance = r2.salesBalance;
+  assert.equal(salesBalance.availableBalance, 0);
+  assert.equal(salesBalance.reservedBalance, 20000);
+
+  // Every request gets a unique reference
+  assert.notEqual(r1.withdrawalRequest.reference, r2.withdrawalRequest.reference);
+
+  // Finalizing one payout only affects its own reservation
+  const done1 = processWithdrawalTransfer(salesBalance, r1.withdrawalRequest, 'successful');
+  assert.equal(done1.salesBalance.reservedBalance, 12000);
+  assert.equal(done1.salesBalance.totalWithdrawals, 8000);
+
+  // A processed request cannot be processed again
+  assert.throws(() => {
+    processWithdrawalTransfer(done1.salesBalance, done1.withdrawalRequest, 'successful');
+  }, /already been successfully processed/);
 });
 
 test('withdrawal bank validation restricts to Opay, Moniepoint, PalmPay and enforces 10 numerical digits', () => {
@@ -513,8 +585,9 @@ test('bulkProcessWithdrawals processes independent withdrawal requests cleanly',
 
   const requests = [req1, req2, req3];
   const salesBalancesMap = {
-    u_w1: { userId: 'u_w1', availableBalance: 0, totalWithdrawals: 5000 },
-    u_w2: { userId: 'u_w2', availableBalance: 0, totalWithdrawals: 10000 }
+    // Funds were already reserved when each request was submitted (available -> reserved).
+    u_w1: { userId: 'u_w1', availableBalance: 0, reservedBalance: 5000, totalWithdrawals: 0 },
+    u_w2: { userId: 'u_w2', availableBalance: 0, reservedBalance: 10000, totalWithdrawals: 0 }
   };
   const paystackResultsMap = {
     wdr_1: { success: true, recipientCode: 'RCP_1', transferCode: 'TRF_1' },
@@ -526,13 +599,129 @@ test('bulkProcessWithdrawals processes independent withdrawal requests cleanly',
   assert.equal(results.failed.length, 1);
   assert.equal(results.skipped.length, 1);
 
-  // Req 1 succeeded
+  // Req 1 succeeded: reservation finalized (reserved released, withdrawn total increased)
   assert.equal(results.successful[0].withdrawalRequest.status, 'successful');
-  // Req 2 failed and restored seller balance
+  assert.equal(results.successful[0].salesBalance.reservedBalance, 0);
+  assert.equal(results.successful[0].salesBalance.totalWithdrawals, 5000);
+  // Req 2 failed: funds remain reserved (never lost)
   assert.equal(results.failed[0].withdrawalRequest.status, 'failed');
-  assert.equal(results.failed[0].salesBalance.availableBalance, 10000); // Restored!
+  assert.equal(results.failed[0].salesBalance.reservedBalance, 10000);
+  assert.equal(results.failed[0].salesBalance.availableBalance, 0);
   // Req 3 was skipped
   assert.equal(results.skipped[0].requestId, 'wdr_3');
+});
+
+test('cancelling a withdrawal releases reserved funds exactly once and blocks non-cancellable states', () => {
+  let salesBalance = createInitialSalesBalance('seller_cancel');
+  salesBalance.availableBalance = 9000;
+  salesBalance.totalEarnings = 9000;
+
+  // Request a withdrawal -> funds move available -> reserved
+  const reqRes = requestSalesWithdrawal(salesBalance, {
+    amount: 4000, bankName: 'Opay', bankCode: '999992', accountNumber: '0123456789'
+  });
+  salesBalance = reqRes.salesBalance;
+  assert.equal(salesBalance.availableBalance, 5000);
+  assert.equal(salesBalance.reservedBalance, 4000);
+
+  // Cancel -> reserved released back to available, nothing withdrawn
+  const cancelled = cancelWithdrawalRequest(reqRes.withdrawalRequest, salesBalance, 'Changed my mind.');
+  assert.equal(cancelled.withdrawalRequest.status, 'cancelled');
+  assert.equal(cancelled.withdrawalRequest.failureReason, 'Changed my mind.');
+  assert.equal(cancelled.salesBalance.availableBalance, 9000);
+  assert.equal(cancelled.salesBalance.reservedBalance, 0);
+  assert.equal(cancelled.salesBalance.totalWithdrawals, 0);
+
+  // Cancelling again is idempotent: no second release, no double credit
+  const again = cancelWithdrawalRequest(cancelled.withdrawalRequest, cancelled.salesBalance);
+  assert.equal(again.alreadyCancelled, true);
+  assert.equal(again.salesBalance.availableBalance, 9000);
+  assert.equal(again.salesBalance.reservedBalance, 0);
+
+  // A successful payout can never be cancelled
+  assert.throws(() => {
+    cancelWithdrawalRequest({ ...reqRes.withdrawalRequest, status: 'successful' }, salesBalance);
+  }, /already been paid out/);
+
+  // A Paystack attempt already in-flight cannot be cancelled
+  assert.throws(() => {
+    cancelWithdrawalRequest({ ...reqRes.withdrawalRequest, status: 'processing' }, salesBalance);
+  }, /being processed/);
+
+  // A failed request that already produced a transfer code must not be cancelled
+  assert.throws(() => {
+    cancelWithdrawalRequest(
+      { ...reqRes.withdrawalRequest, status: 'failed', paystackTransferCode: 'TRF_LIVE' },
+      salesBalance
+    );
+  }, /being processed/);
+});
+
+test('manual bank transfer approval requires explicit admin confirmation and never double-processes', () => {
+  // Case 1: admin confirms the manual transfer -> reservation finalized exactly once
+  let salesBalance = createInitialSalesBalance('seller_manual');
+  salesBalance.availableBalance = 10000;
+  salesBalance.totalEarnings = 10000;
+
+  const reqRes = requestSalesWithdrawal(salesBalance, {
+    amount: 6000, bankName: 'Moniepoint', bankCode: '50515', accountNumber: '9876543210'
+  });
+  salesBalance = reqRes.salesBalance;
+  assert.equal(salesBalance.availableBalance, 4000);
+  assert.equal(salesBalance.reservedBalance, 6000);
+
+  // Manual transfer can never be marked successful without an explicit outcome
+  assert.throws(() => {
+    processManualWithdrawal(reqRes.withdrawalRequest, salesBalance, {});
+  }, /Select a manual transfer outcome/);
+
+  const confirmed = processManualWithdrawal(reqRes.withdrawalRequest, salesBalance, {
+    action: 'confirmed', adminId: 'admin_2'
+  });
+  assert.equal(confirmed.withdrawalRequest.status, 'successful');
+  assert.equal(confirmed.withdrawalRequest.paymentMethod, WITHDRAWAL_PAYMENT_METHOD.MANUAL_BANK_TRANSFER);
+  assert.equal(confirmed.withdrawalRequest.manualConfirmedBy, 'admin_2');
+  assert.ok(confirmed.withdrawalRequest.manualConfirmedAt);
+  assert.equal(confirmed.salesBalance.availableBalance, 4000);
+  assert.equal(confirmed.salesBalance.reservedBalance, 0);
+  assert.equal(confirmed.salesBalance.totalWithdrawals, 6000);
+
+  // Duplicate confirmation must be rejected (no second deduction)
+  assert.throws(() => {
+    processManualWithdrawal(confirmed.withdrawalRequest, confirmed.salesBalance, { action: 'confirmed', adminId: 'admin_2' });
+  }, /already been successfully processed/);
+  assert.equal(confirmed.salesBalance.totalWithdrawals, 6000);
+
+  // A closed (cancelled/rejected) request cannot be processed manually
+  assert.throws(() => {
+    processManualWithdrawal({ ...reqRes.withdrawalRequest, status: 'cancelled' }, salesBalance, { action: 'confirmed' });
+  }, /closed and cannot be processed/);
+
+  // Case 2: admin reports the manual transfer as failed -> reservation released, reason saved
+  let sb2 = createInitialSalesBalance('seller_manual2');
+  sb2.availableBalance = 5000;
+  const r2 = requestSalesWithdrawal(sb2, {
+    amount: 5000, bankName: 'Opay', bankCode: '999992', accountNumber: '1122334455'
+  });
+  sb2 = r2.salesBalance;
+  assert.equal(sb2.availableBalance, 0);
+  assert.equal(sb2.reservedBalance, 5000);
+
+  // A failure report must include an explanation
+  assert.throws(() => {
+    processManualWithdrawal(r2.withdrawalRequest, sb2, { action: 'failed' });
+  }, /failure explanation is required/);
+
+  const failed = processManualWithdrawal(r2.withdrawalRequest, sb2, {
+    action: 'failed', adminId: 'admin_1', failureReason: 'Wrong account number'
+  });
+  assert.equal(failed.withdrawalRequest.status, 'failed');
+  assert.equal(failed.withdrawalRequest.paymentMethod, WITHDRAWAL_PAYMENT_METHOD.MANUAL_BANK_TRANSFER);
+  assert.equal(failed.withdrawalRequest.failureReason, 'Wrong account number');
+  assert.equal(failed.withdrawalRequest.adminId, 'admin_1');
+  assert.equal(failed.salesBalance.availableBalance, 5000);
+  assert.equal(failed.salesBalance.reservedBalance, 0);
+  assert.equal(failed.salesBalance.totalWithdrawals, 0);
 });
 
 test('account deactivation restricts user actions and appeal flow handles validation and duplicate checks', () => {
