@@ -128,6 +128,12 @@ var SHEETS_SCHEMA = {
     'userId',
     'type', // 'topup' | 'purchase_deduction' | 'refund'
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'totalAmountPaid',
+    'feeSnapshot',
     'reference',
     'status', // 'successful' | 'pending' | 'failed'
     'description',
@@ -164,6 +170,13 @@ var SHEETS_SCHEMA = {
     'orderId',
     'type', // 'topup' | 'purchase_deduction' | 'pending_sale' | 'released_sale' | 'refund' | 'withdrawal_request' | 'withdrawal_transfer' | 'withdrawal_failed' | 'reversal'
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'netAmount',
+    'totalAmountPaid',
+    'feeSnapshot',
     'paymentMethod', // 'paystack' | 'wallet' | 'sales_balance' | 'bank_transfer'
     'paymentProvider', // 'paystack' | 'ebron'
     'eBronStatus', // 'pending' | 'completed' | 'failed' | 'requires_reconciliation' | 'refunded' | 'reversed'
@@ -181,6 +194,12 @@ var SHEETS_SCHEMA = {
     'userRegNumber',
     'userEmail',
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'netAmount',
+    'feeSnapshot',
     'bankName',
     'bankCode',
     'accountNumber',
@@ -274,6 +293,86 @@ var SHEETS_SCHEMA = {
   ]
 };
 
+// ============================================================================
+// CENTRALIZED FEE CONFIGURATION & PROGRESSIVE CHARGE RULES
+// ============================================================================
+var FEE_CONFIG = {
+  walletTopUp: {
+    tiers: [
+      { min: 0, max: 5000, percentage: 2.5, flatFee: 200 },
+      { min: 5000, max: 30000, percentage: 3.0, flatFee: 200 },
+      { min: 30000, max: 100000, percentage: 3.5, flatFee: 200 },
+      { min: 100000, max: null, percentage: 4.0, flatFee: 2000 }
+    ]
+  },
+  sellerPayout: {
+    tiers: [
+      { min: 0, max: 5000, percentage: 6.0, flatFee: 100 },
+      { min: 5000, max: 25000, percentage: 5.0, flatFee: 100 },
+      { min: 25000, max: 80000, percentage: 6.0, flatFee: 200 },
+      { min: 80000, max: null, percentage: 5.0, flatFee: 500 }
+    ]
+  }
+};
+
+function getFeeTier(amount, tiers) {
+  var num = Number(amount);
+  if (isNaN(num) || num <= 0) return null;
+  for (var i = 0; i < tiers.length; i++) {
+    var tier = tiers[i];
+    var meetsMin = num >= tier.min;
+    var meetsMax = tier.max === null || tier.max === undefined || num < tier.max;
+    if (meetsMin && meetsMax) return tier;
+  }
+  return tiers[tiers.length - 1] || null;
+}
+
+function calculateTopUpFee(amount, config) {
+  var cfg = config || FEE_CONFIG;
+  var num = Number(amount);
+  if (isNaN(num) || num <= 0) throw new Error('Top-up amount must be a positive number.');
+  var tier = getFeeTier(num, cfg.walletTopUp.tiers);
+  if (!tier) throw new Error('No applicable fee tier found for top-up amount.');
+  var amountKobo = Math.round(num * 100);
+  var percentageFeeKobo = Math.round((amountKobo * tier.percentage) / 100);
+  var flatFeeKobo = Math.round(tier.flatFee * 100);
+  var totalFeeKobo = percentageFeeKobo + flatFeeKobo;
+  var totalPaymentKobo = amountKobo + totalFeeKobo;
+  return {
+    originalAmount: num,
+    percentageRate: tier.percentage,
+    percentageFee: Number((percentageFeeKobo / 100).toFixed(2)),
+    flatFee: Number((flatFeeKobo / 100).toFixed(2)),
+    totalFee: Number((totalFeeKobo / 100).toFixed(2)),
+    totalPayment: Number((totalPaymentKobo / 100).toFixed(2)),
+    isValid: true,
+    tierSnapshot: { min: tier.min, max: tier.max, percentage: tier.percentage, flatFee: tier.flatFee }
+  };
+}
+
+function calculatePayoutFee(amount, config) {
+  var cfg = config || FEE_CONFIG;
+  var num = Number(amount);
+  if (isNaN(num) || num <= 0) throw new Error('Withdrawal amount must be a positive number.');
+  var tier = getFeeTier(num, cfg.sellerPayout.tiers);
+  if (!tier) throw new Error('No applicable fee tier found for payout amount.');
+  var amountKobo = Math.round(num * 100);
+  var percentageFeeKobo = Math.round((amountKobo * tier.percentage) / 100);
+  var flatFeeKobo = Math.round(tier.flatFee * 100);
+  var totalFeeKobo = percentageFeeKobo + flatFeeKobo;
+  var netPayoutKobo = amountKobo - totalFeeKobo;
+  return {
+    requestedAmount: num,
+    percentageRate: tier.percentage,
+    percentageFee: Number((percentageFeeKobo / 100).toFixed(2)),
+    flatFee: Number((flatFeeKobo / 100).toFixed(2)),
+    totalFee: Number((totalFeeKobo / 100).toFixed(2)),
+    netPayout: Number((netPayoutKobo / 100).toFixed(2)),
+    isValid: netPayoutKobo > 0,
+    tierSnapshot: { min: tier.min, max: tier.max, percentage: tier.percentage, flatFee: tier.flatFee }
+  };
+}
+
 function getDb() {
   if (SPREADSHEET_ID) {
     try {
@@ -303,6 +402,16 @@ function setupDatabase() {
       sheet.appendRow(headers);
       sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
       sheet.setFrozenRows(1);
+    } else {
+      // Append any newly added schema columns to existing sheets without altering existing records
+      var lastCol = Math.max(1, sheet.getLastColumn());
+      var existingHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+      headers.forEach(function(h) {
+        if (existingHeaders.indexOf(h) === -1) {
+          var newCol = sheet.getLastColumn() + 1;
+          sheet.getRange(1, newCol).setValue(h).setFontWeight('bold');
+        }
+      });
     }
   });
 
@@ -863,8 +972,12 @@ function processSingleWithdrawalApproval(requestId, adminId) {
     Logger.log('Account resolve skipped during payout: ' + resolveErr.toString());
   }
 
+  var transferAmt = wReq.netAmount !== undefined && wReq.netAmount !== '' && Number(wReq.netAmount) > 0
+    ? Number(wReq.netAmount)
+    : amt;
+
   var transferResult = executePaystackTransfer(
-    amt,
+    transferAmt,
     wReq.bankCode,
     wReq.accountNumber,
     accountName,
@@ -905,18 +1018,21 @@ function processSingleWithdrawalApproval(requestId, adminId) {
       sellerId: wReq.userId,
       type: 'withdrawal',
       amount: amt,
+      netAmount: transferAmt,
+      totalFee: Number(wReq.totalFee) || 0,
+      feePercentage: Number(wReq.feePercentage) || 0,
       paymentMethod: 'bank_transfer',
       paymentProvider: 'paystack',
       eBronStatus: 'completed',
       paystackStatus: transferResult.transferStatus || 'success',
-      statusHistory: [{ status: 'completed', timestamp: now, reason: transferResult.duplicate ? 'Payout already completed (duplicate prevented)' : 'Paystack transfer executed successfully' }],
+      statusHistory: [{ status: 'completed', timestamp: now, reason: transferResult.duplicate ? 'Payout already completed (duplicate prevented)' : 'Paystack transfer executed successfully for net ₦' + transferAmt.toLocaleString() }],
       verificationDetails: JSON.stringify(transferResult)
     });
 
     createNotification(
       wReq.userId,
       'Withdrawal Successful (' + (wReq.reference || wReq.requestId) + ')',
-      'Your bank payout of ₦' + amt.toLocaleString() + ' was successfully transferred to ' + wReq.bankName + ' (' + wReq.accountNumber + ').',
+      'Your bank payout of ₦' + transferAmt.toLocaleString() + ' (Net of ₦' + (Number(wReq.totalFee) || 0).toLocaleString() + ' deductions) was successfully transferred to ' + wReq.bankName + ' (' + wReq.accountNumber + ').',
       'sales',
       '/sell/sales-balance'
     );
@@ -1049,6 +1165,11 @@ function doGet(e) {
 
     if (action === 'setup') {
       return jsonOutput(setupDatabase());
+    }
+
+    // 0b. GET CENTRALIZED FEE CONFIGURATION
+    if (action === 'getFeeConfig') {
+      return jsonOutput({ success: true, config: FEE_CONFIG });
     }
 
     // 1. GET PRODUCTS
@@ -2193,6 +2314,7 @@ function doPost(e) {
         // made here, so wallet top-up works without the UrlFetchApp permission
         // scope. Duplicate credits are still prevented by the reference check above.
         var creditAmount = requestedAmount;
+        var feeCalc = calculateTopUpFee(requestedAmount);
 
         var now = new Date().toISOString();
 
@@ -2214,15 +2336,20 @@ function doPost(e) {
             userWallet.availableBalance = updatedAvail;
           }
 
-          // Record in WalletTransactions
+          // Record in WalletTransactions with complete progressive fee audit
           appendSheetRow('WalletTransactions', {
             transactionId: 'wtx_' + Utilities.getUuid().substr(0, 8),
             userId: topUserId,
             type: 'topup',
             amount: creditAmount,
+            feePercentage: feeCalc.percentageRate,
+            percentageFee: feeCalc.percentageFee,
+            flatFee: feeCalc.flatFee,
+            totalFee: feeCalc.totalFee,
+            totalAmountPaid: feeCalc.totalPayment,
             reference: payRef,
             status: 'successful',
-            description: 'Paystack Wallet Top-up',
+            description: 'Paystack Wallet Top-up (Paid ₦' + feeCalc.totalPayment.toLocaleString() + ' incl. ₦' + feeCalc.totalFee.toLocaleString() + ' fees)',
             createdAt: now
           });
 
@@ -2230,21 +2357,26 @@ function doPost(e) {
           logFinancialTransaction({
             reference: payRef,
             amount: creditAmount,
+            feePercentage: feeCalc.percentageRate,
+            percentageFee: feeCalc.percentageFee,
+            flatFee: feeCalc.flatFee,
+            totalFee: feeCalc.totalFee,
+            totalAmountPaid: feeCalc.totalPayment,
             eBronStatus: 'completed',
             paystackStatus: 'success',
-            verificationDetails: null,
-            details: 'Wallet credited successfully with ₦' + creditAmount.toLocaleString()
+            verificationDetails: JSON.stringify(feeCalc),
+            details: 'Wallet credited with ₦' + creditAmount.toLocaleString() + ' (Total paid: ₦' + feeCalc.totalPayment.toLocaleString() + ', Fees: ₦' + feeCalc.totalFee.toLocaleString() + ')'
           });
 
           createNotification(
             topUserId,
             'Wallet Funded Successfully',
-            '₦' + Number(creditAmount).toLocaleString() + ' was successfully credited to your spending wallet.',
+            '₦' + Number(creditAmount).toLocaleString() + ' was successfully credited to your spending wallet (Total paid: ₦' + feeCalc.totalPayment.toLocaleString() + ').',
             'wallet',
             '/buy/wallets'
           );
 
-          return jsonOutput({ success: true, wallet: userWallet, reference: payRef });
+          return jsonOutput({ success: true, wallet: userWallet, reference: payRef, feeDetails: feeCalc });
         } catch (creditErr) {
           // Reconciliation Safeguard: Paystack verified, but eBron write failed
           logFinancialTransaction({
@@ -2892,6 +3024,20 @@ function doPost(e) {
           return jsonOutput({ success: false, error: 'Withdrawal amount must be a positive number.' });
         }
 
+        var feeCalc;
+        try {
+          feeCalc = calculatePayoutFee(amt);
+        } catch (calcErr) {
+          return jsonOutput({ success: false, error: calcErr.message || 'Error calculating withdrawal fees.' });
+        }
+
+        if (!feeCalc.isValid || feeCalc.netPayout <= 0) {
+          return jsonOutput({
+            success: false,
+            error: 'Withdrawal amount (₦' + amt.toLocaleString() + ') must be greater than total deductions (₦' + feeCalc.totalFee.toLocaleString() + ') to produce a positive payout.'
+          });
+        }
+
         var sBalance = getOrCreateSalesBalance(payload.userId);
         if ((Number(sBalance.availableBalance) || 0) < amt) {
           return jsonOutput({
@@ -2915,6 +3061,12 @@ function doPost(e) {
           userRegNumber: user ? (user.regNumber || user.matricNumber || '') : '',
           userEmail: user ? user.schoolEmail : '',
           amount: amt,
+          feePercentage: feeCalc.percentageRate,
+          percentageFee: feeCalc.percentageFee,
+          flatFee: feeCalc.flatFee,
+          totalFee: feeCalc.totalFee,
+          netAmount: feeCalc.netPayout,
+          feeSnapshot: JSON.stringify(feeCalc),
           bankName: matchedBank.name,
           bankCode: matchedBank.code,
           accountNumber: acc,
@@ -2939,7 +3091,7 @@ function doPost(e) {
 
         appendSheetRow('WithdrawalRequests', req);
 
-        // Reserve funds: move amount from availableBalance into reservedBalance.
+        // Reserve funds: move full requested amount from availableBalance into reservedBalance.
         var reserveRes = reserveWithdrawalFunds(payload.userId, amt);
         if (!reserveRes.success) {
           return jsonOutput({ success: false, error: reserveRes.error || 'Could not reserve withdrawal funds.' });
@@ -2952,12 +3104,17 @@ function doPost(e) {
           sellerId: payload.userId,
           type: 'withdrawal_request',
           amount: amt,
+          feePercentage: feeCalc.percentageRate,
+          percentageFee: feeCalc.percentageFee,
+          flatFee: feeCalc.flatFee,
+          totalFee: feeCalc.totalFee,
+          netAmount: feeCalc.netPayout,
           paymentMethod: 'bank_transfer',
           paymentProvider: 'paystack',
           eBronStatus: 'pending',
           paystackStatus: 'pending',
-          statusHistory: [{ status: 'pending', timestamp: now, reason: 'Withdrawal request submitted and funds reserved (awaiting admin approval)' }],
-          verificationDetails: JSON.stringify({ bankName: matchedBank.name, bankCode: matchedBank.code, accountNumber: acc, reserved: true })
+          statusHistory: [{ status: 'pending', timestamp: now, reason: 'Withdrawal request submitted for ₦' + amt.toLocaleString() + ' (Net payout: ₦' + feeCalc.netPayout.toLocaleString() + ', Deductions: ₦' + feeCalc.totalFee.toLocaleString() + ')' }],
+          verificationDetails: JSON.stringify({ bankName: matchedBank.name, bankCode: matchedBank.code, accountNumber: acc, reserved: true, feeDetails: feeCalc })
         });
 
         // Notify administrator
@@ -3154,24 +3311,33 @@ function doPost(e) {
                 createdAt: now
               });
 
+              var manualTransferAmt = wReq.netAmount !== undefined && wReq.netAmount !== '' && Number(wReq.netAmount) > 0
+                ? Number(wReq.netAmount)
+                : amt;
+
               logFinancialTransaction({
                 reference: wReq.reference || wReq.requestId,
                 userId: wReq.userId,
                 sellerId: wReq.userId,
                 type: 'withdrawal',
                 amount: amt,
+                netAmount: manualTransferAmt,
+                totalFee: Number(wReq.totalFee) || (amt - manualTransferAmt),
+                percentageFee: Number(wReq.percentageFee) || 0,
+                flatFee: Number(wReq.flatFee) || 0,
+                feePercentage: Number(wReq.feePercentage) || 0,
                 paymentMethod: 'manual_bank_transfer',
                 paymentProvider: 'ebron',
                 eBronStatus: 'completed',
                 paystackStatus: 'none',
-                statusHistory: [{ status: 'completed', timestamp: now, reason: 'Manual bank transfer confirmed by admin ' + (adminId || 'n/a') }],
-                verificationDetails: JSON.stringify({ method: 'manual_bank_transfer', confirmedBy: adminId || '' })
+                statusHistory: [{ status: 'completed', timestamp: now, reason: 'Manual bank transfer confirmed by admin ' + (adminId || 'n/a') + ' for net ₦' + manualTransferAmt.toLocaleString() }],
+                verificationDetails: JSON.stringify({ method: 'manual_bank_transfer', confirmedBy: adminId || '', netPayout: manualTransferAmt, fee: Number(wReq.totalFee) || 0 })
               });
 
               createNotification(
                 wReq.userId,
                 'Withdrawal Completed (' + (wReq.reference || wReq.requestId) + ')',
-                'Your withdrawal of ₦' + amt.toLocaleString() + ' has been paid to ' + wReq.bankName + ' (' + wReq.accountNumber + ') via bank transfer.',
+                'Your withdrawal of ₦' + amt.toLocaleString() + ' (net payout ₦' + manualTransferAmt.toLocaleString() + ' after ₦' + (Number(wReq.totalFee) || 0).toLocaleString() + ' fee deductions) has been paid to ' + wReq.bankName + ' (' + wReq.accountNumber + ') via bank transfer.',
                 'sales',
                 '/sell/sales-balance'
               );

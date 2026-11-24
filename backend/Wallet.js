@@ -1,3 +1,5 @@
+import { calculatePayoutFee, calculateTopUpFee, FEE_CONFIG } from './FeeConfig.js';
+
 export const WITHDRAWAL_STATUS = {
   PENDING: 'pending',
   PROCESSING: 'processing',
@@ -37,9 +39,11 @@ export function createInitialBuyerWallet(userId) {
   };
 }
 
-export function topUpBuyerWallet(wallet, amount, reference, description = 'Paystack Wallet Top-up') {
+export function topUpBuyerWallet(wallet, amount, reference, description = 'Paystack Wallet Top-up', feeConfig = FEE_CONFIG) {
   const num = Number(amount);
   if (num <= 0) throw new Error('Top up amount must be positive.');
+
+  const feeCalc = calculateTopUpFee(num, feeConfig);
 
   const updatedWallet = {
     ...wallet,
@@ -52,13 +56,19 @@ export function topUpBuyerWallet(wallet, amount, reference, description = 'Payst
     userId: wallet.userId,
     type: 'topup',
     amount: num,
+    feePercentage: feeCalc.percentageRate,
+    percentageFee: feeCalc.percentageFee,
+    flatFee: feeCalc.flatFee,
+    totalFee: feeCalc.totalFee,
+    totalAmountPaid: feeCalc.totalPayment,
+    feeSnapshot: JSON.stringify(feeCalc),
     reference: reference || 'PSTK_' + Date.now(),
     status: 'successful',
     description,
     createdAt: new Date().toISOString()
   };
 
-  return { wallet: updatedWallet, transaction };
+  return { wallet: updatedWallet, transaction, feeCalculation: feeCalc };
 }
 
 export function creditBuyerRefund(wallet, amount, orderReference, description = 'Refund for cancelled order') {
@@ -250,7 +260,7 @@ export function finalizeWithdrawalReservation(salesBalance, amount) {
   };
 }
 
-export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName = '' }) {
+export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName = '' }, feeConfig = FEE_CONFIG) {
   const num = Number(amount);
   if (isNaN(num) || num <= 0) {
     throw new Error('Withdrawal amount must be a positive number.');
@@ -267,6 +277,11 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
     throw new Error(bankVal.errors[0]);
   }
 
+  const feeCalc = calculatePayoutFee(num, feeConfig);
+  if (!feeCalc.isValid || feeCalc.netPayout <= 0) {
+    throw new Error(`Withdrawal amount (₦${num.toLocaleString()}) must be greater than total fees (₦${feeCalc.totalFee.toLocaleString()}) to produce a positive payout.`);
+  }
+
   // Reserve funds (available -> reserved). No Paystack call, no permanent deduction.
   const updatedBalance = reserveWithdrawalFunds(salesBalance, num);
 
@@ -277,6 +292,12 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
     requestId: reqId,
     userId: salesBalance.userId,
     amount: num,
+    feePercentage: feeCalc.percentageRate,
+    percentageFee: feeCalc.percentageFee,
+    flatFee: feeCalc.flatFee,
+    totalFee: feeCalc.totalFee,
+    netAmount: feeCalc.netPayout,
+    feeSnapshot: JSON.stringify(feeCalc),
     bankName: bankVal.bank.name,
     bankCode: bankVal.bank.code,
     accountNumber: String(accountNumber).trim(),
@@ -299,7 +320,7 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
     updatedAt: new Date().toISOString()
   };
 
-  return { salesBalance: updatedBalance, withdrawalRequest };
+  return { salesBalance: updatedBalance, withdrawalRequest, feeCalculation: feeCalc };
 }
 
 /**
@@ -307,7 +328,22 @@ export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCod
  * reserved amount back into the seller's available balance exactly once.
  * Throws for any state that must not be auto-cancelled.
  */
-export function cancelWithdrawalRequest(withdrawalRequest, salesBalance, reason = 'Cancelled by user.') {
+export function cancelWithdrawalRequest(firstArg, secondArg, thirdArg = 'Cancelled by user.') {
+  let withdrawalRequest;
+  let salesBalance;
+  let reason = thirdArg;
+
+  if (firstArg && (firstArg.requestId || firstArg.reference)) {
+    withdrawalRequest = firstArg;
+    salesBalance = secondArg;
+  } else if (secondArg && (secondArg.requestId || secondArg.reference)) {
+    salesBalance = firstArg;
+    withdrawalRequest = secondArg;
+  } else {
+    withdrawalRequest = firstArg;
+    salesBalance = secondArg;
+  }
+
   if (!withdrawalRequest) throw new Error('Withdrawal request not found.');
 
   const status = withdrawalRequest.status;
@@ -460,12 +496,18 @@ export function processWithdrawalTransfer(firstArg, secondArg, thirdArg = {}, fo
       updatedAt: now
     };
 
+    const netPayoutAmt = withdrawalRequest.netAmount !== undefined && withdrawalRequest.netAmount !== null
+      ? Number(withdrawalRequest.netAmount)
+      : amt;
+
     const transaction = {
       transactionId: 'stx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       sellerId: withdrawalRequest.userId,
       orderId: '',
       orderReference: withdrawalRequest.reference || withdrawalRequest.requestId,
       amount: amt,
+      netAmount: netPayoutAmt,
+      totalFee: Number(withdrawalRequest.totalFee) || 0,
       type: 'withdrawal',
       status: 'completed',
       createdAt: now

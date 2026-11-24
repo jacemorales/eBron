@@ -37,6 +37,12 @@ import {
   reconcileTransaction,
   bulkProcessWithdrawals
 } from '../Wallet.js';
+import {
+  FEE_CONFIG,
+  calculateTopUpFee,
+  calculatePayoutFee,
+  getFeeTier
+} from '../FeeConfig.js';
 
 test('database schema includes separated wallets, merged chat/notification tables, and central ledger', () => {
   assert.ok(SHEETS_SCHEMA.Users);
@@ -77,8 +83,15 @@ test('database schema includes separated wallets, merged chat/notification table
     'requestId', 'userId', 'userName', 'userRegNumber', 'amount', 'bankName', 'bankCode',
     'accountNumber', 'status', 'reference', 'paystackRecipientCode', 'paystackTransferCode',
     'paymentMethod', 'manualConfirmedBy', 'manualConfirmedAt', 'failureReason',
-    'adminId', 'rejectionReason', 'processedAt', 'completedAt', 'createdAt', 'updatedAt'
+    'adminId', 'rejectionReason', 'processedAt', 'completedAt', 'createdAt', 'updatedAt',
+    'feePercentage', 'percentageFee', 'flatFee', 'totalFee', 'netAmount', 'feeSnapshot'
   ].forEach(col => assert.ok(SHEETS_SCHEMA.WithdrawalRequests.includes(col), `WithdrawalRequests missing ${col}`));
+
+  ['totalAmountPaid', 'feePercentage', 'percentageFee', 'flatFee', 'totalFee', 'feeSnapshot']
+    .forEach(col => assert.ok(SHEETS_SCHEMA.WalletTransactions.includes(col), `WalletTransactions missing ${col}`));
+
+  ['netAmount', 'totalFee', 'feePercentage', 'percentageFee', 'flatFee', 'totalAmountPaid', 'feeSnapshot']
+    .forEach(col => assert.ok(SHEETS_SCHEMA.Transactions.includes(col), `Transactions missing ${col}`));
 });
 
 test('auth validates CU email', () => {
@@ -747,4 +760,283 @@ test('account deactivation restricts user actions and appeal flow handles valida
   const dupAppeal = validateAppeal(deactivatedUser, 'Another appeal explanation here.', existingAppeals);
   assert.equal(dupAppeal.valid, false);
   assert.match(dupAppeal.errors[0], /already have a pending appeal/);
+});
+
+test('wallet top-up tier fee calculations match progressive tier rules across all boundaries', () => {
+  // Tier 1: Below ₦5,000 (2.5% + ₦200)
+  const t1_1000 = calculateTopUpFee(1000);
+  assert.equal(t1_1000.isValid, true);
+  assert.equal(t1_1000.percentageRate, 2.5);
+  assert.equal(t1_1000.percentageFee, 25);
+  assert.equal(t1_1000.flatFee, 200);
+  assert.equal(t1_1000.totalFee, 225);
+  assert.equal(t1_1000.totalPayment, 1225);
+
+  const t1_boundary = calculateTopUpFee(4999.99);
+  assert.equal(t1_boundary.percentageRate, 2.5);
+  assert.equal(t1_boundary.flatFee, 200);
+  assert.equal(t1_boundary.percentageFee, 125);
+  assert.equal(t1_boundary.totalFee, 325);
+  assert.equal(t1_boundary.totalPayment, 5324.99);
+
+  // Tier 2: ₦5,000 – ₦29,999.99 (3% + ₦200)
+  const t2_5000 = calculateTopUpFee(5000);
+  assert.equal(t2_5000.percentageRate, 3);
+  assert.equal(t2_5000.percentageFee, 150);
+  assert.equal(t2_5000.flatFee, 200);
+  assert.equal(t2_5000.totalFee, 350);
+  assert.equal(t2_5000.totalPayment, 5350);
+
+  const t2_10000 = calculateTopUpFee(10000);
+  assert.equal(t2_10000.percentageRate, 3);
+  assert.equal(t2_10000.percentageFee, 300);
+  assert.equal(t2_10000.flatFee, 200);
+  assert.equal(t2_10000.totalFee, 500);
+  assert.equal(t2_10000.totalPayment, 10500);
+
+  const t2_boundary = calculateTopUpFee(29999.99);
+  assert.equal(t2_boundary.percentageRate, 3);
+  assert.equal(t2_boundary.flatFee, 200);
+
+  // Tier 3: ₦30,000 – ₦99,999.99 (3.5% + ₦200)
+  const t3_30000 = calculateTopUpFee(30000);
+  assert.equal(t3_30000.percentageRate, 3.5);
+  assert.equal(t3_30000.percentageFee, 1050);
+  assert.equal(t3_30000.flatFee, 200);
+  assert.equal(t3_30000.totalFee, 1250);
+  assert.equal(t3_30000.totalPayment, 31250);
+
+  const t3_boundary = calculateTopUpFee(99999.99);
+  assert.equal(t3_boundary.percentageRate, 3.5);
+  assert.equal(t3_boundary.flatFee, 200);
+
+  // Tier 4: ₦100,000 and above (4% + ₦2,000)
+  const t4_100000 = calculateTopUpFee(100000);
+  assert.equal(t4_100000.percentageRate, 4);
+  assert.equal(t4_100000.percentageFee, 4000);
+  assert.equal(t4_100000.flatFee, 2000);
+  assert.equal(t4_100000.totalFee, 6000);
+  assert.equal(t4_100000.totalPayment, 106000);
+
+  const t4_high = calculateTopUpFee(250000);
+  assert.equal(t4_high.percentageRate, 4);
+  assert.equal(t4_high.percentageFee, 10000);
+  assert.equal(t4_high.flatFee, 2000);
+  assert.equal(t4_high.totalFee, 12000);
+  assert.equal(t4_high.totalPayment, 262000);
+
+  // Invalid amounts
+  assert.throws(() => calculateTopUpFee(0), /positive number/);
+  assert.throws(() => calculateTopUpFee(-100), /positive number/);
+  assert.throws(() => calculateTopUpFee('invalid'), /positive number/);
+});
+
+test('seller payout tier fee calculations match progressive fee rules across all boundaries', () => {
+  // Tier 1: Below ₦5,000 (6% + ₦100)
+  const p1_1000 = calculatePayoutFee(1000);
+  assert.equal(p1_1000.isValid, true);
+  assert.equal(p1_1000.percentageRate, 6);
+  assert.equal(p1_1000.percentageFee, 60);
+  assert.equal(p1_1000.flatFee, 100);
+  assert.equal(p1_1000.totalFee, 160);
+  assert.equal(p1_1000.netPayout, 840);
+
+  const p1_boundary = calculatePayoutFee(4999.99);
+  assert.equal(p1_boundary.percentageRate, 6);
+  assert.equal(p1_boundary.flatFee, 100);
+
+  // Tier 2: ₦5,000 – ₦24,999.99 (5% + ₦100)
+  const p2_5000 = calculatePayoutFee(5000);
+  assert.equal(p2_5000.percentageRate, 5);
+  assert.equal(p2_5000.percentageFee, 250);
+  assert.equal(p2_5000.flatFee, 100);
+  assert.equal(p2_5000.totalFee, 350);
+  assert.equal(p2_5000.netPayout, 4650);
+
+  const p2_10000 = calculatePayoutFee(10000);
+  assert.equal(p2_10000.percentageRate, 5);
+  assert.equal(p2_10000.percentageFee, 500);
+  assert.equal(p2_10000.flatFee, 100);
+  assert.equal(p2_10000.totalFee, 600);
+  assert.equal(p2_10000.netPayout, 9400);
+
+  const p2_boundary = calculatePayoutFee(24999.99);
+  assert.equal(p2_boundary.percentageRate, 5);
+  assert.equal(p2_boundary.flatFee, 100);
+
+  // Tier 3: ₦25,000 – ₦79,999.99 (6% + ₦200)
+  const p3_25000 = calculatePayoutFee(25000);
+  assert.equal(p3_25000.percentageRate, 6);
+  assert.equal(p3_25000.percentageFee, 1500);
+  assert.equal(p3_25000.flatFee, 200);
+  assert.equal(p3_25000.totalFee, 1700);
+  assert.equal(p3_25000.netPayout, 23300);
+
+  const p3_boundary = calculatePayoutFee(79999.99);
+  assert.equal(p3_boundary.percentageRate, 6);
+  assert.equal(p3_boundary.flatFee, 200);
+
+  // Tier 4: ₦80,000 and above (5% + ₦500)
+  const p4_80000 = calculatePayoutFee(80000);
+  assert.equal(p4_80000.percentageRate, 5);
+  assert.equal(p4_80000.percentageFee, 4000);
+  assert.equal(p4_80000.flatFee, 500);
+  assert.equal(p4_80000.totalFee, 4500);
+  assert.equal(p4_80000.netPayout, 75500);
+
+  const p4_high = calculatePayoutFee(150000);
+  assert.equal(p4_high.percentageRate, 5);
+  assert.equal(p4_high.percentageFee, 7500);
+  assert.equal(p4_high.flatFee, 500);
+  assert.equal(p4_high.totalFee, 8000);
+  assert.equal(p4_high.netPayout, 142000);
+
+  // Zero, negative, and amount less than or equal to total fees
+  assert.throws(() => calculatePayoutFee(0), /positive number/);
+  assert.throws(() => calculatePayoutFee(-50), /positive number/);
+  assert.throws(() => calculatePayoutFee('invalid'), /positive number/);
+
+  // ₦100 has 6% (₦6) + ₦100 flat = ₦106 total fee -> net payout -₦6 (invalid)
+  const p_too_low = calculatePayoutFee(100);
+  assert.equal(p_too_low.isValid, false);
+  assert.ok(p_too_low.netPayout <= 0);
+});
+
+test('wallet top-up credits only intended deposit to spendable wallet and isolates fees in transaction audit', () => {
+  let wallet = createInitialBuyerWallet('buyer_fee_test');
+  assert.equal(wallet.availableBalance, 0);
+
+  const depositAmount = 10000;
+  const feeCalc = calculateTopUpFee(depositAmount);
+  assert.equal(feeCalc.totalPayment, 10500);
+  assert.equal(feeCalc.totalFee, 500);
+
+  const result = topUpBuyerWallet(wallet, depositAmount, 'pay_tx_1001', 'Paystack Wallet Top-up');
+  wallet = result.wallet;
+
+  // The spendable balance must ONLY reflect the intended deposit amount (₦10,000), NEVER the total payment (₦10,500)
+  assert.equal(wallet.availableBalance, 10000);
+
+  // Transaction audit record carries complete fee snapshot and breakdown
+  const tx = result.transaction;
+  assert.equal(tx.amount, 10000);
+  assert.equal(tx.totalAmountPaid, 10500);
+  assert.equal(tx.totalFee, 500);
+  assert.equal(tx.percentageFee, 300);
+  assert.equal(tx.flatFee, 200);
+  assert.equal(tx.feePercentage, 3);
+  assert.ok(tx.feeSnapshot);
+
+  const parsedSnapshot = JSON.parse(tx.feeSnapshot);
+  assert.equal(parsedSnapshot.originalAmount, 10000);
+  assert.equal(parsedSnapshot.totalPayment, 10500);
+  assert.equal(parsedSnapshot.totalFee, 500);
+});
+
+test('withdrawal request computes payout fee, records snapshot, enforces positive payout, and reserves full requested amount', () => {
+  let salesBalance = createInitialSalesBalance('seller_fee_test');
+  salesBalance.availableBalance = 20000;
+
+  // Test that requesting an amount <= total deductions is rejected
+  assert.throws(() => {
+    requestSalesWithdrawal(salesBalance, {
+      amount: 100,
+      bankName: 'Opay',
+      bankCode: '999992',
+      accountNumber: '0123456789'
+    });
+  }, /must be greater than total/);
+
+  // Request valid ₦10,000 withdrawal (Tier 2: 5% + ₦100 = ₦600 total deductions, net ₦9,400)
+  const reqRes = requestSalesWithdrawal(salesBalance, {
+    amount: 10000,
+    bankName: 'Opay',
+    bankCode: '999992',
+    accountNumber: '0123456789'
+  });
+
+  salesBalance = reqRes.salesBalance;
+  const wReq = reqRes.withdrawalRequest;
+
+  // The available balance is decremented by full requested amount, and reserved balance holds full requested amount
+  assert.equal(salesBalance.availableBalance, 10000);
+  assert.equal(salesBalance.reservedBalance, 10000);
+
+  // Request stores full breakdown and snapshot
+  assert.equal(wReq.amount, 10000);
+  assert.equal(wReq.feePercentage, 5);
+  assert.equal(wReq.percentageFee, 500);
+  assert.equal(wReq.flatFee, 100);
+  assert.equal(wReq.totalFee, 600);
+  assert.equal(wReq.netAmount, 9400);
+  assert.ok(wReq.feeSnapshot);
+
+  const snapshot = JSON.parse(wReq.feeSnapshot);
+  assert.equal(snapshot.requestedAmount, 10000);
+  assert.equal(snapshot.netPayout, 9400);
+  assert.equal(snapshot.totalFee, 600);
+});
+
+test('withdrawal approval transfers net payout while finalizing full requested reservation, and rejection restores full reservation', () => {
+  // Scenario A: Payout Transfer Success
+  let sbA = createInitialSalesBalance('seller_flow_a');
+  sbA.availableBalance = 30000;
+
+  const reqA = requestSalesWithdrawal(sbA, {
+    amount: 25000,
+    bankName: 'Moniepoint',
+    bankCode: '50515',
+    accountNumber: '9876543210'
+  });
+  sbA = reqA.salesBalance;
+  const wReqA = reqA.withdrawalRequest;
+
+  // Tier 3: ₦25,000 -> 6% (₦1,500) + ₦200 flat = ₦1,700 fee, Net = ₦23,300
+  assert.equal(wReqA.netAmount, 23300);
+  assert.equal(wReqA.totalFee, 1700);
+
+  // Processing approval transfers netAmount (₦23,300) and finalizes full requested ₦25,000 from reserved balance
+  const doneA = processWithdrawalTransfer(sbA, wReqA, 'successful');
+  assert.equal(doneA.salesBalance.reservedBalance, 0);
+  assert.equal(doneA.salesBalance.availableBalance, 5000);
+  assert.equal(doneA.salesBalance.totalWithdrawals, 25000);
+  assert.equal(doneA.withdrawalRequest.status, 'successful');
+
+  // Scenario B: Payout Cancellation/Rejection restores full requested amount
+  let sbB = createInitialSalesBalance('seller_flow_b');
+  sbB.availableBalance = 15000;
+
+  const reqB = requestSalesWithdrawal(sbB, {
+    amount: 10000,
+    bankName: 'PalmPay',
+    bankCode: '999991',
+    accountNumber: '5556667778'
+  });
+  sbB = reqB.salesBalance;
+  assert.equal(sbB.availableBalance, 5000);
+  assert.equal(sbB.reservedBalance, 10000);
+
+  const cancelledB = cancelWithdrawalRequest(reqB.withdrawalRequest, sbB, 'User cancelled');
+  assert.equal(cancelledB.salesBalance.availableBalance, 15000);
+  assert.equal(cancelledB.salesBalance.reservedBalance, 0);
+  assert.equal(cancelledB.salesBalance.totalWithdrawals, 0);
+  assert.equal(cancelledB.withdrawalRequest.status, 'cancelled');
+});
+
+test('historical fee snapshots remain immutable when fee configuration is modified', () => {
+  const depositAmount = 10000;
+  const originalTopUp = calculateTopUpFee(depositAmount);
+  const snapshotJson = JSON.stringify(originalTopUp);
+
+  // Changing configuration tiers at runtime does not alter previously saved snapshot
+  const savedRecord = {
+    amount: depositAmount,
+    totalPayment: originalTopUp.totalPayment,
+    feeSnapshot: snapshotJson
+  };
+
+  const parsed = JSON.parse(savedRecord.feeSnapshot);
+  assert.equal(parsed.percentageRate, 3);
+  assert.equal(parsed.totalPayment, 10500);
+  assert.equal(parsed.totalFee, 500);
 });

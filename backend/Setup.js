@@ -117,6 +117,12 @@ var SHEETS_SCHEMA = {
     'userId',
     'type', // 'topup' | 'purchase_deduction' | 'refund'
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'totalAmountPaid',
+    'feeSnapshot',
     'reference',
     'status', // 'successful' | 'pending' | 'failed'
     'description',
@@ -155,6 +161,13 @@ var SHEETS_SCHEMA = {
     'orderId',
     'type', // 'topup' | 'purchase_deduction' | 'pending_sale' | 'released_sale' | 'refund' | 'withdrawal_request' | 'withdrawal_transfer' | 'withdrawal_failed' | 'reversal'
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'netAmount',
+    'totalAmountPaid',
+    'feeSnapshot',
     'paymentMethod', // 'paystack' | 'wallet' | 'sales_balance' | 'bank_transfer'
     'paymentProvider', // 'paystack' | 'ebron'
     'eBronStatus', // 'pending' | 'completed' | 'failed' | 'requires_reconciliation' | 'refunded' | 'reversed'
@@ -172,6 +185,12 @@ var SHEETS_SCHEMA = {
     'userRegNumber',
     'userEmail',
     'amount',
+    'feePercentage',
+    'percentageFee',
+    'flatFee',
+    'totalFee',
+    'netAmount',
+    'feeSnapshot',
     'bankName',
     'bankCode',
     'accountNumber',
@@ -262,6 +281,16 @@ function setupDatabase(spreadsheet) {
     if (!sheet) sheet = ss.insertSheet(sheetName);
     if (sheet.getLastRow() === 0) {
       sheet.appendRow(headers);
+    } else {
+      // Append any missing header columns to existing sheets without disturbing data
+      var lastCol = Math.max(1, sheet.getLastColumn());
+      var existingHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+      headers.forEach(function(h) {
+        if (existingHeaders.indexOf(h) === -1) {
+          var newCol = sheet.getLastColumn() + 1;
+          sheet.getRange(1, newCol).setValue(h);
+        }
+      });
     }
   });
 

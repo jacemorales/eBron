@@ -13,6 +13,34 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
     - **Male Halls**: Peter, John, Paul, Daniel, Joseph, Joshua.
     - **Female Halls**: Mary, Lydia, Deborah.
 
+- **Centralized & Configurable Fee Structure (Wallet Top-Ups & Seller Payouts)**:
+  - **Editable Single Source of Truth**: All percentage charges and flat fees are centrally configured in `backend/FeeConfig.js` (and mirrored in `backend/Code.gs` and `frontend/src/config/feeConfig.ts`). Future fee adjustments can be made directly in this file without modifying individual components or payment logic.
+  - **Integer Kobo Precision**: All calculations convert Naira to integer kobo (`Math.round(amount * 100)`) prior to rate multiplication to eliminate floating-point rounding issues.
+  - **Wallet Top-Up Progressive Fee Tiers (Buyer Deposits)**:
+    | Top-Up Amount | Percentage Fee | Flat Gateway Cost |
+    |---|---:|---:|
+    | Below ₦5,000 | 2.5% | ₦200 |
+    | ₦5,000 – ₦29,999.99 | 3.0% | ₦200 |
+    | ₦30,000 – ₦99,999.99 | 3.5% | ₦200 |
+    | ₦100,000 and above | 4.0% | ₦2,000 |
+    - **Formula**: `Total Top-Up Charge = (Top-Up Amount × Percentage Fee) + Flat Gateway Cost`; `Total Payment = Top-Up Amount + Total Top-Up Charge`.
+    - **Balance Isolation**: Only the intended deposit amount is credited to the buyer's spendable wallet (`Wallets.availableBalance`). Deposit fees are paid to Paystack and isolated in `WalletTransactions` and `Transactions` records.
+  - **Seller Payout Progressive Fee Tiers (Bank Withdrawals)**:
+    | Payout Amount | Service Charge | Flat Transfer Fee |
+    |---|---:|---:|
+    | Below ₦5,000 | 6.0% | ₦100 |
+    | ₦5,000 – ₦24,999.99 | 5.0% | ₦100 |
+    | ₦25,000 – ₦79,999.99 | 6.0% | ₦200 |
+    | ₦80,000 and above | 5.0% | ₦500 |
+    - **Formula**: `Percentage Charge = Payout Amount × Applicable Percentage`; `Total Payout Fee = Percentage Charge + Flat Transfer Fee`; `Net Payout = Payout Amount - Total Payout Fee`.
+    - **Positive Net Payout Enforcement**: The withdrawal amount must strictly exceed total fee deductions (`Net Payout > 0`). Requests where deductions meet or exceed the requested amount are rejected.
+    - **Reservation & Transfer Integrity**: The full requested amount is reserved from the seller's available sales balance upon submission. Upon admin approval, the **Net Payout** is transferred to the seller's bank account (via Paystack automated transfer or manual bank transfer), and the full reserved amount is finalized. If cancelled or rejected, the full reserved amount is restored to available balance.
+  - **Historical Fee Snapshot Invariance**: Every transaction and withdrawal request persists a serialized `feeSnapshot` and granular fee fields (`feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `totalAmountPaid`). Subsequent modifications to fee configuration tiers never retroactively change historical transaction records.
+  - **Live Transparency Throughout UI**:
+    - Buyer Top-Up modal renders real-time calculation cards showing Intended Credit, Service Charge %, Flat Gateway Cost, Total Deposit Charges, and Final Payable Amount.
+    - Seller Withdrawal modal shows Requested Amount, Platform Service Charge %, Flat Transfer Fee, Total Deductions, and Net Payout amount before submission.
+    - Admin Withdrawal Approval dialog explicitly presents Requested Amount, Deductions, and Net Bank Transfer Amount for both Paystack and manual transfer flows.
+
 - **Dual-Balance Financial Architecture (Strict Separation of Funds)**:
   - **Buyer Spending Wallet (`Wallets` & `WalletTransactions`)**:
     - Dedicated to shopping capital.
@@ -137,9 +165,9 @@ The database consists of 17 structured sheets. To initialize or update your spre
   `walletId`, `userId`, `availableBalance`, `updatedAt`
 
 ### Sheet 8: `WalletTransactions` (Buyer Top-ups, Deductions & Refunds)
-- **Purpose**: Audit trail for buyer wallet funding, order deductions, and refund credits.
+- **Purpose**: Audit trail for buyer wallet funding, order deductions, and refund credits with detailed fee breakdowns.
 - **Columns (in exact order)**:
-  `transactionId`, `userId`, `type`, `amount`, `reference`, `status`, `description`, `createdAt`
+  `transactionId`, `userId`, `type`, `amount`, `feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `totalAmountPaid`, `feeSnapshot`, `reference`, `status`, `description`, `createdAt`
 - **Transaction Types**: `'topup'`, `'purchase_deduction'`, `'refund_credit'`.
 
 ### Sheet 9: `SalesBalances` (Seller Escrow & Earnings)
@@ -154,11 +182,12 @@ The database consists of 17 structured sheets. To initialize or update your spre
 - **Transaction Types**: `'pending_sale'`, `'released_sale'`, `'withdrawal'`, `'cancelled_sale'`.
 
 ### Sheet 11: `WithdrawalRequests` (Admin-Approved Bank Payouts)
-- **Purpose**: Bank transfer payout requests submitted by sellers from their available sales balance, plus the full admin-approval lifecycle for **both** Paystack and manual bank transfers, including cancellations.
+- **Purpose**: Bank transfer payout requests submitted by sellers from their available sales balance, including fee deductions, net payout tracking, and the full admin-approval lifecycle for **both** Paystack and manual bank transfers, including cancellations.
 - **Columns (in exact order)**:
-  `requestId`, `userId`, `userName`, `userRegNumber`, `userEmail`, `amount`, `bankName`, `bankCode`, `accountNumber`, `accountName`, `status`, `reference`, `paystackRecipientCode`, `paystackTransferCode`, `paystackStatus`, `paymentMethod`, `adminId`, `manualConfirmedBy`, `manualConfirmedAt`, `rejectionReason`, `failureReason`, `adminNotes`, `processedAt`, `completedAt`, `createdAt`, `updatedAt`
+  `requestId`, `userId`, `userName`, `userRegNumber`, `userEmail`, `amount`, `feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `feeSnapshot`, `bankName`, `bankCode`, `accountNumber`, `accountName`, `status`, `reference`, `paystackRecipientCode`, `paystackTransferCode`, `paystackStatus`, `paymentMethod`, `adminId`, `manualConfirmedBy`, `manualConfirmedAt`, `rejectionReason`, `failureReason`, `adminNotes`, `processedAt`, `completedAt`, `createdAt`, `updatedAt`
 - **Statuses**: `'pending'` (Pending Approval), `'processing'`, `'successful'`, `'failed'`, `'rejected'`, `'reversed'`, `'cancelled'`.
 - **`paymentMethod`**: `''` (undecided), `'paystack'`, or `'manual_bank_transfer'`. Set when an administrator chooses the payout method and never switched once processing begins.
+- **`netAmount`**: The actual net amount transferred to the seller's bank account after platform fee deductions.
 - **`adminId`**: administrator who approved/rejected the request. **`manualConfirmedBy` / `manualConfirmedAt`**: the administrator and timestamp that confirmed a manual bank transfer actually completed. **`failureReason`**: reason a manual or Paystack transfer failed, or the reason a request was cancelled.
 
 ### Sheet 12: `Appeals` (Account Deactivation Appeals)
@@ -187,9 +216,9 @@ The database consists of 17 structured sheets. To initialize or update your spre
   `logId`, `adminId`, `action`, `details`, `targetId`, `ipAddress`, `createdAt`
 
 ### Sheet 16: `Transactions` (Central Financial Ledger & Reconciliation)
-- **Purpose**: Comprehensive, tamper-evident ledger of every monetary movement across eBron with complete transition history.
+- **Purpose**: Comprehensive, tamper-evident ledger of every monetary movement across eBron with complete transition history and fee tracking.
 - **Columns (in exact order)**:
-  `transactionId`, `reference`, `userId`, `buyerId`, `sellerId`, `productId`, `orderId`, `type`, `amount`, `paymentMethod`, `paymentProvider`, `eBronStatus`, `paystackStatus`, `statusHistory`, `createdAt`, `updatedAt`, `verificationDetails`, `errorMessage`
+  `transactionId`, `reference`, `userId`, `buyerId`, `sellerId`, `productId`, `orderId`, `type`, `amount`, `feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `totalAmountPaid`, `feeSnapshot`, `paymentMethod`, `paymentProvider`, `eBronStatus`, `paystackStatus`, `statusHistory`, `createdAt`, `updatedAt`, `verificationDetails`, `errorMessage`
 - **Types**: `'topup'`, `'purchase'`, `'refund'`, `'sales_credit'`, `'withdrawal'`, `'withdrawal_request'`.
 - **eBron Statuses**: `'pending'`, `'completed'`, `'failed'`, `'requires_reconciliation'`, `'rejected'`.
 - **statusHistory**: A JSON-serialized array preserving each sequential state change (timestamp, status, reason/error).
@@ -263,7 +292,7 @@ VITE_PAYSTACK_PUBLIC_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxx
    - Navigate to **Project Settings > Script Properties** in Apps Script.
    - Add property: `PAYSTACK_SECRET_KEY` = `sk_test_...` (or `sk_live_...`).
    - **Important**: The secret key must be the `sk_...` **secret** key (never the `pk_...` public key). It is read exclusively server-side by `paystackApiCall()` and is never sent to the frontend.
-7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 17 sheets (including the `Feedback` sheet).
+7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 17 sheets. If you have an existing spreadsheet with data, `setupDatabase` safely detects and appends any missing fee columns (`feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `totalAmountPaid`, `feeSnapshot`) to existing sheets without clearing or disturbing historical rows.
 8. Click **Deploy > New deployment**:
    - **Type**: Web app
    - **Description**: eBron Production API

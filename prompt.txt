@@ -1,0 +1,66 @@
+3
+3
+11/150
+27
+
+
+
+view products
+add product
+purchase product
+chat customer
+refund
+topup wallet
+sales account
+withdraw money
+activate/deactivate acc
+feedback
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. Progressive Wallet Top-Up Tiers (Buyer Deposit)
+Top-Up Amount		Your Top-Up Fee	Gateway Cost (Est.)	Your Net Margin on Deposit
+Under ₦5,000		2.5% +₦200 
+₦5,000 – ₦29,999	3% +₦200
+₦30,000 – ₦99,999	3.5% +₦200
+₦100,000 and above	4% +₦2000			₦2,500+ pure profit per deposit
+
+
+
+
+
+2. Seller Payout (Regressive — Decreases with Amount)
+Item / Payout Amount	Service Charge	Flat Transfer Fee	Example Payout & Your Total Profit
+Under ₦5,000		6%	+ ₦100	
+₦5,000 – ₦24,999	5%	+ ₦100
+
+₦25,000 – ₦79,999	6%	+ ₦200	
+₦80,000 and above	5%	+ ₦500	
+
+
+
+
+
+
