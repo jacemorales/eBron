@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, ArrowUpRight, DollarSign, AlertCircle, ShieldCheck, CheckCircle2, Loader2, Lock } from 'lucide-react';
+import { Clock, ArrowUpRight, DollarSign, AlertCircle, ShieldCheck, CheckCircle2, Loader2, Lock, Receipt } from 'lucide-react';
 import type { SellerBalance, SalesTransaction, WithdrawalRequest, Bank } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { calculatePayoutFee, PayoutFeeCalculation } from '../config/feeConfig';
 
 const SUPPORTED_BANKS: Bank[] = [
   { id: 'opay', name: 'Opay', code: '999992' },
@@ -76,6 +77,17 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
   const [cancelTarget, setCancelTarget] = useState<WithdrawalRequest | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
+  // Live calculation of payout deductions and net amount received
+  const numAmt = Number(amt) || 0;
+  let feeCalc: PayoutFeeCalculation | null = null;
+  if (numAmt > 0) {
+    try {
+      feeCalc = calculatePayoutFee(numAmt);
+    } catch {
+      feeCalc = null;
+    }
+  }
+
   const loadData = async () => {
     if (!user) return;
     try {
@@ -134,6 +146,22 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
       onToast('error', 'Withdrawal amount exceeds your available sales balance.');
       return;
     }
+
+    let currentCalc = feeCalc;
+    if (!currentCalc) {
+      try {
+        currentCalc = calculatePayoutFee(withdrawAmt);
+      } catch (err: any) {
+        onToast('error', err.message || 'Error calculating withdrawal fees.');
+        return;
+      }
+    }
+
+    if (!currentCalc.isValid || currentCalc.netPayout <= 0) {
+      onToast('error', `Withdrawal amount (₦${withdrawAmt.toLocaleString()}) must be greater than total fees (₦${currentCalc.totalFee.toLocaleString()}) to produce a positive payout.`);
+      return;
+    }
+
     if (!/^\d{10}$/.test(accNum)) {
       onToast('error', 'Account number must be exactly 10 numerical digits.');
       return;
@@ -378,7 +406,17 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
                       <div>{w.reference || w.requestId}</div>
                       <div className="text-[10px] text-slate-400">{w.requestId}</div>
                     </td>
-                    <td className="p-3.5 font-black text-slate-900">₦{Number(w.amount).toLocaleString()}</td>
+                    <td className="p-3.5 font-black text-slate-900">
+                      <div>₦{Number(w.amount).toLocaleString()}</div>
+                      {w.netAmount !== undefined && w.netAmount !== null && Number(w.netAmount) > 0 ? (
+                        <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                          Net: ₦{Number(w.netAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {w.totalFee ? (
+                            <span className="text-slate-400 font-normal"> (Fee: ₦{Number(w.totalFee).toLocaleString(undefined, { minimumFractionDigits: 2 })})</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="p-3.5 text-slate-700">
                       <div>{w.bankName} - {maskAccount(w.accountNumber)}</div>
                       <div className="text-[10px] text-slate-400">{w.accountName}</div>
@@ -489,6 +527,41 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
               />
             </div>
 
+            {/* Live Payout Fee Breakdown */}
+            {feeCalc && (
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5 text-xs animate-in fade-in">
+                <div className="flex items-center gap-1.5 font-bold text-slate-700 pb-1 border-b border-slate-200/70">
+                  <Receipt className="w-3.5 h-3.5 text-cu-blue" />
+                  <span>Withdrawal Payout Breakdown</span>
+                </div>
+                <div className="flex justify-between text-slate-600 pt-0.5">
+                  <span>Requested Amount:</span>
+                  <span className="font-bold text-slate-900">₦{feeCalc.requestedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between text-slate-500 text-[11px]">
+                  <span>Platform Service Charge ({feeCalc.percentageRate}%):</span>
+                  <span className="text-rose-600 font-semibold">-₦{feeCalc.percentageFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between text-slate-500 text-[11px]">
+                  <span>Flat Transfer Fee:</span>
+                  <span className="text-rose-600 font-semibold">-₦{feeCalc.flatFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="border-t border-slate-200/80 pt-1 flex justify-between font-bold text-slate-700 text-[11px]">
+                  <span>Total Deductions:</span>
+                  <span className="text-rose-600 font-bold">-₦{feeCalc.totalFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className={`border-t border-slate-200/80 pt-1.5 flex justify-between items-center font-black text-sm ${feeCalc.isValid ? 'text-emerald-800' : 'text-rose-600'}`}>
+                  <span>Net Payout (You Will Receive):</span>
+                  <span>₦{feeCalc.netPayout.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                {!feeCalc.isValid && (
+                  <p className="text-[10px] text-rose-600 font-bold pt-1">
+                    Withdrawal amount must exceed total deductions (₦{feeCalc.totalFee.toLocaleString()}) to produce a positive payout.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block mb-1 font-bold text-slate-700">Select Bank</label>
               <select
@@ -557,7 +630,7 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || accNum.length !== 10 || !amt || !accName.trim()}
+                disabled={isSubmitting || accNum.length !== 10 || !amt || !accName.trim() || !feeCalc || !feeCalc.isValid}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow transition-colors disabled:opacity-50 flex items-center gap-1.5"
               >
                 {isSubmitting ? (

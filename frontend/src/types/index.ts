@@ -188,6 +188,11 @@ export interface WalletTransaction {
   reference: string;
   status: 'successful' | 'pending' | 'failed';
   description: string;
+  feePercentage?: number;
+  percentageFee?: number;
+  flatFee?: number;
+  totalFee?: number;
+  totalAmountPaid?: number;
   createdAt: string;
 }
 
@@ -254,6 +259,12 @@ export interface WithdrawalRequest {
   adminNotes: string;
   processedAt: string | null;
   completedAt?: string | null;
+  feePercentage?: number;
+  percentageFee?: number;
+  flatFee?: number;
+  totalFee?: number;
+  netAmount?: number;
+  feeSnapshot?: string;
   createdAt: string;
   updatedAt?: string;
 }
@@ -321,6 +332,12 @@ export interface FinancialTransaction {
   eBronStatus: string;
   paystackStatus: string;
   statusHistory: StatusHistoryItem[] | string;
+  feePercentage?: number;
+  percentageFee?: number;
+  flatFee?: number;
+  totalFee?: number;
+  netAmount?: number;
+  totalAmountPaid?: number;
   createdAt: string;
   updatedAt: string;
   verificationDetails?: string;

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, ShieldCheck, X } from 'lucide-react';
+import { PlusCircle, ShieldCheck, X, Receipt } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { calculateTopUpFee, TopUpFeeCalculation } from '../config/feeConfig';
 import type { BuyerWallet } from '../types';
 
 declare global {
@@ -37,6 +38,16 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
   // Guarantees a payment is only ever processed once per opened modal.
   const processingRef = useRef(false);
 
+  const numAmount = Number(amount) || 0;
+  let feeCalc: TopUpFeeCalculation | null = null;
+  if (numAmount > 0) {
+    try {
+      feeCalc = calculateTopUpFee(numAmount);
+    } catch {
+      feeCalc = null;
+    }
+  }
+
   useEffect(() => {
     if (isOpen) {
       processingRef.current = false;
@@ -46,12 +57,15 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
 
   if (!isOpen || !user) return null;
 
-  const finalize = async (reference: string, amountVal: number) => {
+  const finalize = async (reference: string, amountVal: number, calc?: TopUpFeeCalculation | null) => {
     if (processingRef.current) return;
     processingRef.current = true;
 
     try {
-      const res = await api.topUpWallet(user.userId, amountVal, reference);
+      const res = await api.topUpWallet(user.userId, amountVal, reference, {
+        fee: calc?.totalFee,
+        totalPaid: calc?.totalPayment
+      });
       if (res.success && res.wallet) {
         onSuccess(res.wallet);
         if (!res.alreadyCredited) {
@@ -90,6 +104,16 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
       return;
     }
 
+    let currentCalc = feeCalc;
+    if (!currentCalc) {
+      try {
+        currentCalc = calculateTopUpFee(amountVal);
+      } catch (calcErr: any) {
+        onToast('error', calcErr.message || 'Failed to calculate top-up fee.');
+        return;
+      }
+    }
+
     if (!PAYSTACK_PUBLIC_KEY) {
       onToast('error', 'Paystack is not configured. Please set VITE_PAYSTACK_PUBLIC_KEY in your .env file.');
       return;
@@ -105,21 +129,24 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
     // One reference per payment attempt. It is reused for the Paystack transaction and
     // the backend credit, so a duplicated callback can never credit the wallet twice.
     const reference = 'PSTK_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+    const totalToPayKobo = Math.round(currentCalc.totalPayment * 100);
 
     const handler = window.PaystackPop.setup({
       key: PAYSTACK_PUBLIC_KEY,
       email: user.schoolEmail,
-      amount: Math.round(amountVal * 100),
+      amount: totalToPayKobo,
       currency: 'NGN',
       ref: reference,
       metadata: {
         custom_fields: [
           { display_name: 'Student Name', variable_name: 'student_name', value: user.fullName },
-          { display_name: 'Reg Number', variable_name: 'reg_number', value: user.regNumber }
+          { display_name: 'Reg Number', variable_name: 'reg_number', value: user.regNumber },
+          { display_name: 'Intended Credit', variable_name: 'intended_credit', value: `₦${currentCalc.originalAmount.toLocaleString()}` },
+          { display_name: 'Fee Breakdown', variable_name: 'fee_breakdown', value: `₦${currentCalc.totalFee.toLocaleString()} (${currentCalc.percentageRate}% + ₦${currentCalc.flatFee})` }
         ]
       },
       callback: (response: { reference: string }) => {
-        finalize(response && response.reference ? response.reference : reference, amountVal);
+        finalize(response && response.reference ? response.reference : reference, amountVal, currentCalc);
       },
       onClose: () => {
         setLoading(false);
@@ -196,9 +223,39 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
           ))}
         </div>
 
-        <div className="p-3 bg-slate-50 rounded-2xl text-[11px] text-slate-600 border border-slate-100 flex items-center gap-2">
-          <ShieldCheck className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-          <span>Credits directly to your buyer spending balance for immediate purchases.</span>
+        {/* Live Top-Up Fee Calculation Breakdown */}
+        {feeCalc && (
+          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5 text-xs animate-in fade-in">
+            <div className="flex items-center gap-1.5 font-bold text-slate-700 pb-1 border-b border-slate-200/70">
+              <Receipt className="w-3.5 h-3.5 text-cu-blue" />
+              <span>Payment & Fee Breakdown</span>
+            </div>
+            <div className="flex justify-between text-slate-600 pt-0.5">
+              <span>Intended Wallet Credit:</span>
+              <span className="font-bold text-slate-900">₦{feeCalc.originalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="flex justify-between text-slate-500 text-[11px]">
+              <span>Service Charge ({feeCalc.percentageRate}%):</span>
+              <span>+₦{feeCalc.percentageFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="flex justify-between text-slate-500 text-[11px]">
+              <span>Flat Gateway Cost:</span>
+              <span>+₦{feeCalc.flatFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="border-t border-slate-200/80 pt-1 flex justify-between font-bold text-slate-700 text-[11px]">
+              <span>Total Top-Up Charges:</span>
+              <span>₦{feeCalc.totalFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="border-t border-slate-200/80 pt-1.5 flex justify-between items-center text-emerald-800 font-black text-sm">
+              <span>Total Amount to Pay:</span>
+              <span>₦{feeCalc.totalPayment.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="p-2.5 bg-slate-50 rounded-2xl text-[11px] text-slate-600 border border-slate-100 flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <span>Only your intended deposit amount is added to your spendable wallet balance.</span>
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
@@ -211,11 +268,11 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
           </button>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !feeCalc}
             className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition"
           >
             <PlusCircle className="w-4 h-4" />
-            {loading ? 'Connecting...' : `Pay ₦${Number(amount || 0).toLocaleString()}`}
+            {loading ? 'Connecting...' : `Pay ₦${(feeCalc ? feeCalc.totalPayment : Number(amount || 0)).toLocaleString()}`}
           </button>
         </div>
       </form>

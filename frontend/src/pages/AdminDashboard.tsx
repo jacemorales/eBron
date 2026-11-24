@@ -328,12 +328,16 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
   const runPaystackApproval = async () => {
     if (!approvalTarget || approvalBusy) return;
     const target = approvalTarget;
+    const netPayout = target.netAmount !== undefined && target.netAmount !== null ? Number(target.netAmount) : Number(target.amount || 0);
+    const fee = target.totalFee !== undefined && target.totalFee !== null ? Number(target.totalFee) : 0;
     const confirmApprove = window.confirm(
       `Approve and pay out via Paystack Transfer?\n\n` +
       `Request: ${target.reference || target.requestId}\n` +
-      `Amount: ₦${Number(target.amount || 0).toLocaleString()}\n` +
-      `Bank: ${target.bankName || ''} (${target.accountNumber || ''})\n\n` +
-      `This initiates a real Paystack transfer and cannot be undone.`
+      `Requested Amount: ₦${Number(target.amount || 0).toLocaleString()}\n` +
+      `Deductions (Fee): ₦${fee.toLocaleString()}\n` +
+      `Net Payout to Bank: ₦${netPayout.toLocaleString()}\n` +
+      `Destination Bank: ${target.bankName || ''} (${target.accountNumber || ''})\n\n` +
+      `This initiates a real Paystack transfer of ₦${netPayout.toLocaleString()} and cannot be undone.`
     );
     if (!confirmApprove) return;
     setApprovalBusy(true);
@@ -1372,7 +1376,19 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                         <div className="text-[10px] text-slate-500">{w.userRegNumber || '—'}</div>
                         <div className="text-[10px] text-slate-400">{w.userEmail}</div>
                       </td>
-                      <td className="p-3 font-bold text-slate-900">₦{Number(w.amount).toLocaleString()}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">₦{Number(w.amount).toLocaleString()}</div>
+                        {w.netAmount !== undefined && w.netAmount !== null && Number(w.netAmount) > 0 ? (
+                          <div className="text-[11px] text-emerald-700 font-bold mt-0.5">
+                            Net: ₦{Number(w.netAmount).toLocaleString()}
+                          </div>
+                        ) : null}
+                        {w.totalFee !== undefined && w.totalFee !== null && Number(w.totalFee) > 0 ? (
+                          <div className="text-[10px] text-slate-400">
+                            Fee: ₦{Number(w.totalFee).toLocaleString()} ({w.feePercentage || ''}%{w.flatFee ? ` + ₦${w.flatFee}` : ''})
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="p-3">
                         <div className="font-semibold text-slate-800">{w.bankName} {w.bankCode ? <span className="font-mono text-slate-500 font-normal">({w.bankCode})</span> : ''}</div>
                         <div className="font-mono text-slate-600">{w.accountNumber}</div>
@@ -2300,7 +2316,9 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                     <DollarSign className="w-5 h-5 text-emerald-600" /> Approve Withdrawal — Choose Payment Method
                   </h3>
                   <p className="text-xs text-slate-500 mt-1">
-                    Request <strong>{approvalTarget.reference || approvalTarget.requestId}</strong> • ₦{Number(approvalTarget.amount).toLocaleString()} • {approvalTarget.bankName} ({approvalTarget.accountNumber})
+                    Request <strong>{approvalTarget.reference || approvalTarget.requestId}</strong> • Requested: ₦{Number(approvalTarget.amount).toLocaleString()}
+                    {approvalTarget.netAmount ? ` • Net Payout: ₦${Number(approvalTarget.netAmount).toLocaleString()}` : ''}
+                    {approvalTarget.totalFee ? ` (Fee: ₦${Number(approvalTarget.totalFee).toLocaleString()})` : ''} • {approvalTarget.bankName} ({approvalTarget.accountNumber})
                   </p>
                 </div>
                 <p className="text-xs text-slate-600">You must choose how this withdrawal will be paid out. The method cannot be switched once processing begins.</p>
@@ -2312,9 +2330,9 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                     className="w-full text-left p-4 rounded-2xl border-2 border-sky-200 hover:border-sky-400 hover:bg-sky-50 transition-colors disabled:opacity-50"
                   >
                     <div className="flex items-center gap-2 font-black text-sky-800 text-sm">
-                      <CreditCard className="w-4 h-4" /> Paystack Transfer
+                      <CreditCard className="w-4 h-4" /> Paystack Transfer (Net Payout: ₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()})
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1">Automated secure transfer through the existing Paystack integration. Marked successful only after Paystack confirms.</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Automated secure transfer of ₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()} through Paystack. Marked successful only after Paystack confirms.</p>
                   </button>
                   <button
                     type="button"
@@ -2323,9 +2341,9 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                     className="w-full text-left p-4 rounded-2xl border-2 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50 transition-colors disabled:opacity-50"
                   >
                     <div className="flex items-center gap-2 font-black text-indigo-800 text-sm">
-                      <Store className="w-4 h-4" /> Manual Bank Transfer
+                      <Store className="w-4 h-4" /> Manual Bank Transfer (Net Payout: ₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()})
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1">Transfer the funds to the user's bank yourself, then confirm the outcome here.</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Transfer the net payout (₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()}) to the user's bank yourself, then confirm the outcome here.</p>
                   </button>
                 </div>
               </div>
@@ -2336,11 +2354,15 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
               <div className="space-y-4">
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">Manual Bank Transfer</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Transfer the amount to the account below, then record the outcome.</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Transfer the net payout amount to the account below, then record the outcome.</p>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-2">
                   <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">User's Full Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.userName || '—'}</span></div>
-                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Amount</span><span className="font-black text-slate-900">₦{Number(approvalTarget.amount).toLocaleString()}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Requested Amount</span><span className="font-bold text-slate-700">₦{Number(approvalTarget.amount).toLocaleString()}</span></div>
+                  {approvalTarget.totalFee !== undefined && approvalTarget.totalFee !== null && Number(approvalTarget.totalFee) > 0 && (
+                    <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Total Deductions</span><span className="text-rose-600 font-bold">-₦{Number(approvalTarget.totalFee).toLocaleString()} ({approvalTarget.feePercentage || ''}% + ₦{approvalTarget.flatFee || 0})</span></div>
+                  )}
+                  <div className="flex justify-between gap-3 border-t border-slate-200 pt-1.5"><span className="text-slate-900 font-bold">Net Payout to Transfer</span><span className="font-black text-emerald-800 text-sm">₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()}</span></div>
                   <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Bank Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.bankName || '—'}</span></div>
                   <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Account Number</span><span className="font-mono font-bold text-slate-900 text-right">{approvalTarget.accountNumber || '—'}</span></div>
                   <div className="flex justify-between gap-3"><span className="text-slate-500 font-semibold">Account Name</span><span className="font-bold text-slate-900 text-right">{approvalTarget.accountName || '—'}</span></div>
@@ -2354,7 +2376,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                     onClick={() => setApprovalStep('manual_confirm')}
                     className="flex-1 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    <CheckCircle className="w-4 h-4" /> I Have Transferred
+                    <CheckCircle className="w-4 h-4" /> I Have Transferred ₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()}
                   </button>
                   <button
                     type="button"
@@ -2385,7 +2407,7 @@ export const AdminDashboard: React.FC<{ onToast: (type: 'success' | 'error' | 'i
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">Confirm Transfer Completed</h3>
                   <p className="text-sm text-slate-600 mt-1">
-                    Confirm that you have actually completed a bank transfer of <strong>₦{Number(approvalTarget.amount).toLocaleString()}</strong> to {approvalTarget.bankName} ({approvalTarget.accountNumber}).
+                    Confirm that you have actually completed a bank transfer of <strong>₦{Number(approvalTarget.netAmount || approvalTarget.amount).toLocaleString()}</strong> (Net payout after ₦{Number(approvalTarget.totalFee || 0).toLocaleString()} fee) to {approvalTarget.bankName} ({approvalTarget.accountNumber}).
                   </p>
                   <p className="text-xs text-slate-500 mt-2 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
                     This will mark the withdrawal <strong>Successful</strong>, finalize the reserved balance deduction, and notify the user. Only confirm if the money has genuinely left your account.

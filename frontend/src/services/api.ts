@@ -554,9 +554,24 @@ export const api = {
     }
   },
 
-  async topUpWallet(userId: string, amount: number, reference?: string): Promise<{ success: boolean; wallet?: BuyerWallet; alreadyCredited?: boolean; error?: string }> {
+  async getFeeConfig(): Promise<any> {
     try {
-      const res = await gasPost('topUpWallet', { userId, amount, reference });
+      const res = await gasGet('getFeeConfig');
+      if (res && res.config) return res.config;
+    } catch (err) {
+      console.error('getFeeConfig error:', err);
+    }
+    return null;
+  },
+
+  async topUpWallet(
+    userId: string,
+    amount: number,
+    reference?: string,
+    feeData?: { fee?: number; totalPaid?: number }
+  ): Promise<{ success: boolean; wallet?: BuyerWallet; alreadyCredited?: boolean; error?: string }> {
+    try {
+      const res = await gasPost('topUpWallet', { userId, amount, reference, ...feeData });
       return res;
     } catch (err: any) {
       return { success: false, error: err.message };
