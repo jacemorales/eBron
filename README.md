@@ -14,7 +14,7 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
     - **Female Halls**: Mary, Lydia, Deborah.
 
 - **Centralized & Configurable Fee Structure (Wallet Top-Ups & Seller Payouts)**:
-  - **Editable Single Source of Truth**: All percentage charges and flat fees are centrally configured in `backend/FeeConfig.js` (and mirrored in `backend/Code.gs` and `frontend/src/config/feeConfig.ts`). Future fee adjustments can be made directly in this file without modifying individual components or payment logic.
+  - **Dynamic Single Source of Truth**: All percentage charges, flat fees, and amount ranges are centrally managed in the **`FeeConfig`** Google Sheet tab. Any adjustments or new amount tiers made directly in the spreadsheet take effect immediately across the application without modifying code or re-deploying.
   - **Integer Kobo Precision**: All calculations convert Naira to integer kobo (`Math.round(amount * 100)`) prior to rate multiplication to eliminate floating-point rounding issues.
   - **Wallet Top-Up Progressive Fee Tiers (Buyer Deposits)**:
     | Top-Up Amount | Percentage Fee | Flat Gateway Cost |
@@ -113,9 +113,9 @@ eBron is an eBay-inspired student marketplace designed exclusively for students 
 
 ---
 
-## 2. Google Sheets Database Blueprint (17 Sheets)
+## 2. Google Sheets Database Blueprint (18 Sheets)
 
-The database consists of 17 structured sheets. To initialize or update your spreadsheet automatically, run `setupDatabase()` or `initializeAllSheets()` in `backend/Code.gs`.
+The database consists of 18 structured sheets. To initialize or update your spreadsheet automatically, run `setupDatabase()` or `initializeAllSheets()` in `backend/Code.gs`.
 
 ### Sheet 1: `Users`
 - **Purpose**: Student accounts, administrative roles, residence details, and security credentials.
@@ -231,6 +231,13 @@ The database consists of 17 structured sheets. To initialize or update your spre
 - **Statuses**: `'New'`, `'Under Review'`, `'Resolved'`.
 - **adminNotes**: Administrator-only internal notes. This column is never returned to non-admin requests (`getMyFeedback` strips it).
 
+### Sheet 18: `FeeConfig` (Dynamic Fee Configuration & Amount Ranges)
+- **Purpose**: Stores live, editable fee tiers for wallet top-ups and seller payouts. When populated, Google Apps Script dynamically loads fees directly from this sheet so administrators can adjust charges or add amount ranges without re-deploying code.
+- **Columns (in exact order)**:
+  `configId`, `category`, `min`, `max`, `percentage`, `flatFee`, `description`, `updatedAt`
+- **Categories**: `'walletTopUp'`, `'sellerPayout'`.
+- **Pre-population**: Running `setupDatabase()` automatically inserts default tier rows if the sheet is empty.
+
 ---
 
 ## 3. Installation & Local Setup
@@ -292,7 +299,7 @@ VITE_PAYSTACK_PUBLIC_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxx
    - Navigate to **Project Settings > Script Properties** in Apps Script.
    - Add property: `PAYSTACK_SECRET_KEY` = `sk_test_...` (or `sk_live_...`).
    - **Important**: The secret key must be the `sk_...` **secret** key (never the `pk_...` public key). It is read exclusively server-side by `paystackApiCall()` and is never sent to the frontend.
-7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 17 sheets. If you have an existing spreadsheet with data, `setupDatabase` safely detects and appends any missing fee columns (`feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `totalAmountPaid`, `feeSnapshot`) to existing sheets without clearing or disturbing historical rows.
+7. Run `initializeAllSheets` or `setupDatabase` once from the Apps Script editor to auto-create and format all 18 sheets. If you have an existing spreadsheet with data, `setupDatabase` safely detects and appends any missing fee columns (`feePercentage`, `percentageFee`, `flatFee`, `totalFee`, `netAmount`, `totalAmountPaid`, `feeSnapshot`) to existing sheets without clearing or disturbing historical rows.
 8. Click **Deploy > New deployment**:
    - **Type**: Web app
    - **Description**: eBron Production API
@@ -336,13 +343,81 @@ Do these in order whenever you update the backend:
 1. Paste the latest `backend/Code.gs` into the Apps Script editor and save.
 2. Set/confirm `SPREADSHEET_ID` and the `PAYSTACK_SECRET_KEY` Script Property.
 3. Confirm `appsscript.json` includes the `script.external_request` scope and authorize once (**Review permissions → Allow**).
-4. Run `initializeAllSheets()` / `setupDatabase()` once to create or non-destructively migrate every sheet (including the new withdrawal columns).
+4. Run `initializeAllSheets()` / `setupDatabase()` once to create or non-destructively migrate every sheet (including the new withdrawal columns and `FeeConfig` sheet).
 5. **Deploy > Manage deployments > Edit > Version: New version > Deploy** so the live Web App runs the updated code.
 6. Update `frontend/.env` (`VITE_API_URL`, `VITE_PAYSTACK_PUBLIC_KEY`), then rebuild the frontend (`cd frontend && npm run build`).
 
 ---
 
-## 4. Withdrawal Workflow
+## 4. How to Manage Service Charges & Add Amount Ranges (Google Sheets)
+
+eBron allows administrators to manage wallet top-up and seller payout service charges dynamically via the **`FeeConfig`** Google Sheet tab. This enables you to adjust percentage rates, flat fees, or add new amount ranges on the fly without editing code or re-deploying Google Apps Script.
+
+### 1. The `FeeConfig` Google Sheet Blueprint
+
+Open your eBron Google Spreadsheet and switch to the **`FeeConfig`** tab (created and populated automatically when running `setupDatabase()`).
+
+#### Columns (in exact order):
+1. **`configId`**: Unique identifier for the tier (e.g. `cfg_topup_1`, `cfg_payout_1`).
+2. **`category`**: Must be either `walletTopUp` (buyer deposits) or `sellerPayout` (seller bank withdrawals).
+3. **`min`**: Start of amount range in Naira (e.g. `0`, `5000`, `100000`).
+4. **`max`**: End of amount range in Naira (e.g. `5000`, `30000`). **Leave empty or blank for the highest unbounded tier**.
+5. **`percentage`**: Service charge percentage (e.g. `2.5`, `3.0`, `5.0`).
+6. **`flatFee`**: Flat fee in Naira (e.g. `200`, `100`, `2000`).
+7. **`description`**: Human-readable label (e.g. `Under ₦5,000 deposit tier`).
+8. **`updatedAt`**: ISO timestamp of last update (e.g. `2026-11-25T00:00:00.000Z`).
+
+---
+
+### 2. Concrete Example Values for the Spreadsheet
+
+Here is an exact table of rows to paste or enter into your `FeeConfig` spreadsheet:
+
+| configId | category | min | max | percentage | flatFee | description | updatedAt |
+|---|---|---:|---:|---:|---:|---|---|
+| `cfg_topup_1` | `walletTopUp` | 0 | 5000 | 2.5 | 200 | Under ₦5k deposit | `2026-11-25T00:00:00Z` |
+| `cfg_topup_2` | `walletTopUp` | 5000 | 30000 | 3.0 | 200 | ₦5k – ₦30k deposit | `2026-11-25T00:00:00Z` |
+| `cfg_topup_3` | `walletTopUp` | 30000 | 100000 | 3.5 | 200 | ₦30k – ₦100k deposit | `2026-11-25T00:00:00Z` |
+| `cfg_topup_4` | `walletTopUp` | 100000 | 200000 | 2.0 | 2000 | ₦100k – ₦200k deposit | `2026-11-25T00:00:00Z` |
+| `cfg_topup_5` | `walletTopUp` | 200000 | | 1.5 | 2000 | ₦200k+ deposit (unbounded) | `2026-11-25T00:00:00Z` |
+| `cfg_payout_1` | `sellerPayout` | 0 | 5000 | 6.0 | 100 | Under ₦5k payout | `2026-11-25T00:00:00Z` |
+| `cfg_payout_2` | `sellerPayout` | 5000 | 25000 | 5.0 | 100 | ₦5k – ₦25k payout | `2026-11-25T00:00:00Z` |
+| `cfg_payout_3` | `sellerPayout` | 25000 | 80000 | 6.0 | 200 | ₦25k – ₦80k payout | `2026-11-25T00:00:00Z` |
+| `cfg_payout_4` | `sellerPayout` | 80000 | | 5.0 | 500 | ₦80k+ payout (unbounded) | `2026-11-25T00:00:00Z` |
+
+---
+
+### 3. How to Adjust Charges or Add New Amount Ranges
+
+1. **Changing a Rate or Flat Fee**:
+   - Simply find the row in the `FeeConfig` sheet and edit the `percentage` or `flatFee` cell.
+   - Example: To change the ₦5,000 – ₦30,000 top-up rate from `3.0%` to `2.8%`, click cell E3 and type `2.8`.
+2. **Adding a New Amount Range**:
+   - Insert a new row with the relevant `category` (`walletTopUp` or `sellerPayout`).
+   - Enter `min` and `max` for the range.
+   - Example: To add a ₦500,000 and above tier, insert a row:
+     `cfg_topup_6` | `walletTopUp` | `500000` | (leave blank) | `1.0` | `2500` | `₦500k+ VIP tier`
+   - Set the previous tier's `max` to `500000`. (Even if you leave `max` blank, the smart tier engine automatically clamps the lower tier's upper bound to the next tier's `min`).
+3. **Instant Live Effect**:
+   - Google Apps Script queries the `FeeConfig` sheet dynamically on every incoming request.
+   - The frontend automatically fetches the updated schedule on launch and whenever the Top-Up or Withdrawal modal opens. Changes take effect immediately without building or re-deploying anything.
+
+---
+
+### 4. Network Glitch Protection (No 0-Fee Glitches)
+
+To prevent any scenario where a student experiences poor network and tries to pay without the service charge:
+1. **Frontend Button Locking**:
+   - When a student opens the Top-Up or Withdrawal modal, the submit button is **strictly disabled** with a loading spinner while fees are verified from Google Sheets.
+   - If the student's internet disconnects, the modal displays an error banner: *"Unable to Calculate Charges. Could not connect to Google Sheets."* along with a **Retry** button. The payment button remains completely locked and unclickable.
+2. **Independent Backend Gatekeeper**:
+   - Even if someone attempted to bypass the frontend and hit the backend API directly, Google Apps Script independently recalculates the total charge from the `FeeConfig` sheet and queries Paystack directly to verify the exact amount paid. If the user paid ₦10,000 on Paystack instead of the required ₦10,500, the backend immediately rejects the transaction and credits ₦0.
+
+---
+
+
+
+## 5. Withdrawal Workflow
 
 ### End-to-end lifecycle
 ```
@@ -399,7 +474,7 @@ Every withdrawal keeps an append-only record across **Sales Balance history**, t
 
 ---
 
-## 5. Default Administrator Credentials
+## 6. Default Administrator Credentials
 
 Administrator credentials and roles are verified directly in the `Users` sheet in Google Sheets (where `role = 'admin'`).
 
@@ -422,7 +497,7 @@ Administrator credentials and roles are verified directly in the `Users` sheet i
 
 ---
 
-## 6. Verification & Testing
+## 7. Verification & Testing
 
 ### Backend Unit Tests
 Execute the comprehensive Node.js unit test suite:
@@ -430,7 +505,7 @@ Execute the comprehensive Node.js unit test suite:
 npm run test:backend
 ```
 The test suite validates:
-- Database schema coverage and column presence across all 17 sheets.
+- Database schema coverage and column presence across all 18 sheets.
 - Covenant University student email and hostel assignment validations.
 - Buyer wallet top-up, deduction, and refund credits.
 - Seller sales balance pending escrow and availability release.
@@ -466,7 +541,7 @@ npm run build
 
 ---
 
-## 7. Technical Troubleshooting & Best Practices
+## 8. Technical Troubleshooting & Best Practices
 
 - **CORS Handling with Google Apps Script**:
   - Google Apps Script Web Apps do not respond to HTTP `OPTIONS` preflight requests.

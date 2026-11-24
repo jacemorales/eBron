@@ -1,4 +1,119 @@
-import { calculatePayoutFee, calculateTopUpFee, FEE_CONFIG } from './FeeConfig.js';
+// Fee tier helper for dynamic tier evaluation
+export function getFeeTier(amount, tiers = []) {
+  const num = Number(amount);
+  if (isNaN(num) || num <= 0 || !Array.isArray(tiers) || tiers.length === 0) return null;
+
+  const sorted = [...tiers].sort((a, b) => (Number(a.min) || 0) - (Number(b.min) || 0));
+
+  let matchedTier = null;
+  for (let i = 0; i < sorted.length; i++) {
+    const tier = sorted[i];
+    const nextTier = sorted[i + 1];
+    const min = Number(tier.min) || 0;
+
+    const effectiveMax = (tier.max !== null && tier.max !== undefined && String(tier.max).trim() !== '' && !isNaN(Number(tier.max)))
+      ? Number(tier.max)
+      : (nextTier ? (Number(nextTier.min) || null) : null);
+
+    const meetsMin = num >= min;
+    const meetsMax = effectiveMax === null || isNaN(effectiveMax) || num < effectiveMax;
+
+    if (meetsMin && meetsMax) {
+      matchedTier = tier;
+    }
+  }
+
+  return matchedTier || sorted[sorted.length - 1] || null;
+}
+
+// Default test fee configuration for local testing
+const DEFAULT_TEST_FEES = {
+  walletTopUp: {
+    tiers: [
+      { min: 0, max: 5000, percentage: 2.5, flatFee: 200 },
+      { min: 5000, max: 30000, percentage: 3.0, flatFee: 200 },
+      { min: 30000, max: 100000, percentage: 3.5, flatFee: 200 },
+      { min: 100000, max: null, percentage: 2.0, flatFee: 2000 },
+      { min: 200000, max: null, percentage: 2.0, flatFee: 2000 }
+    ]
+  },
+  sellerPayout: {
+    tiers: [
+      { min: 0, max: 5000, percentage: 6.0, flatFee: 100 },
+      { min: 5000, max: 25000, percentage: 5.0, flatFee: 100 },
+      { min: 25000, max: 80000, percentage: 6.0, flatFee: 200 },
+      { min: 80000, max: null, percentage: 5.0, flatFee: 500 }
+    ]
+  }
+};
+
+export function calculateTopUpFee(amount, feeConfig = DEFAULT_TEST_FEES) {
+  const num = Number(amount);
+  if (isNaN(num) || num <= 0) {
+    throw new Error('Top-up amount must be a positive number.');
+  }
+
+  const tiers = feeConfig?.walletTopUp?.tiers;
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    throw new Error('Fee schedule must be loaded from FeeConfig.');
+  }
+
+  const tier = getFeeTier(num, tiers);
+  if (!tier) {
+    throw new Error('No applicable fee tier found for top-up amount.');
+  }
+
+  const amountKobo = Math.round(num * 100);
+  const percentageFeeKobo = Math.round((amountKobo * tier.percentage) / 100);
+  const flatFeeKobo = Math.round(tier.flatFee * 100);
+  const totalFeeKobo = percentageFeeKobo + flatFeeKobo;
+  const totalPaymentKobo = amountKobo + totalFeeKobo;
+
+  return {
+    originalAmount: num,
+    percentageRate: tier.percentage,
+    percentageFee: Number((percentageFeeKobo / 100).toFixed(2)),
+    flatFee: Number((flatFeeKobo / 100).toFixed(2)),
+    totalFee: Number((totalFeeKobo / 100).toFixed(2)),
+    totalPayment: Number((totalPaymentKobo / 100).toFixed(2)),
+    isValid: true,
+    tierSnapshot: { min: tier.min, max: tier.max, percentage: tier.percentage, flatFee: tier.flatFee }
+  };
+}
+
+export function calculatePayoutFee(amount, feeConfig = DEFAULT_TEST_FEES) {
+  const num = Number(amount);
+  if (isNaN(num) || num <= 0) {
+    throw new Error('Withdrawal amount must be a positive number.');
+  }
+
+  const tiers = feeConfig?.sellerPayout?.tiers;
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    throw new Error('Fee schedule must be loaded from FeeConfig.');
+  }
+
+  const tier = getFeeTier(num, tiers);
+  if (!tier) {
+    throw new Error('No applicable fee tier found for payout amount.');
+  }
+
+  const amountKobo = Math.round(num * 100);
+  const percentageFeeKobo = Math.round((amountKobo * tier.percentage) / 100);
+  const flatFeeKobo = Math.round(tier.flatFee * 100);
+  const totalFeeKobo = percentageFeeKobo + flatFeeKobo;
+  const netPayoutKobo = amountKobo - totalFeeKobo;
+
+  return {
+    requestedAmount: num,
+    percentageRate: tier.percentage,
+    percentageFee: Number((percentageFeeKobo / 100).toFixed(2)),
+    flatFee: Number((flatFeeKobo / 100).toFixed(2)),
+    totalFee: Number((totalFeeKobo / 100).toFixed(2)),
+    netPayout: Number((netPayoutKobo / 100).toFixed(2)),
+    isValid: netPayoutKobo > 0,
+    tierSnapshot: { min: tier.min, max: tier.max, percentage: tier.percentage, flatFee: tier.flatFee }
+  };
+}
 
 export const WITHDRAWAL_STATUS = {
   PENDING: 'pending',
@@ -39,7 +154,7 @@ export function createInitialBuyerWallet(userId) {
   };
 }
 
-export function topUpBuyerWallet(wallet, amount, reference, description = 'Paystack Wallet Top-up', feeConfig = FEE_CONFIG) {
+export function topUpBuyerWallet(wallet, amount, reference, description = 'Paystack Wallet Top-up', feeConfig = DEFAULT_TEST_FEES) {
   const num = Number(amount);
   if (num <= 0) throw new Error('Top up amount must be positive.');
 
@@ -260,7 +375,7 @@ export function finalizeWithdrawalReservation(salesBalance, amount) {
   };
 }
 
-export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName = '' }, feeConfig = FEE_CONFIG) {
+export function requestSalesWithdrawal(salesBalance, { amount, bankName, bankCode = '', accountNumber, accountName = '' }, feeConfig = DEFAULT_TEST_FEES) {
   const num = Number(amount);
   if (isNaN(num) || num <= 0) {
     throw new Error('Withdrawal amount must be a positive number.');

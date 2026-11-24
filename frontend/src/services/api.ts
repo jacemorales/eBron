@@ -56,6 +56,7 @@ async function gasGet(action: string, params: Record<string, any> = {}): Promise
 
   const url = new URL(GAS_API_URL);
   url.searchParams.set('action', action);
+  url.searchParams.set('_t', String(Date.now()));
 
   const clean = sanitizeParams(params);
   for (const [k, v] of Object.entries(clean)) {
@@ -557,11 +558,27 @@ export const api = {
   async getFeeConfig(): Promise<any> {
     try {
       const res = await gasGet('getFeeConfig');
+      if (res && res.success && res.config) return res.config;
       if (res && res.config) return res.config;
-    } catch (err) {
-      console.error('getFeeConfig error:', err);
+      if (res && res.error) {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      console.warn('gasGet getFeeConfig failed, attempting gasPost fallback:', err);
+      try {
+        const postRes = await gasPost('getFeeConfig');
+        if (postRes && postRes.success && postRes.config) return postRes.config;
+        if (postRes && postRes.config) return postRes.config;
+        if (postRes && postRes.error) {
+          throw new Error(postRes.error);
+        }
+      } catch (postErr: any) {
+        console.error('getFeeConfig error:', postErr);
+        throw postErr;
+      }
+      throw err;
     }
-    return null;
+    throw new Error('Unable to retrieve fee configuration from server.');
   },
 
   async topUpWallet(

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, ArrowUpRight, DollarSign, AlertCircle, ShieldCheck, CheckCircle2, Loader2, Lock, Receipt } from 'lucide-react';
+import { Clock, ArrowUpRight, DollarSign, AlertCircle, ShieldCheck, CheckCircle2, Loader2, Lock, Receipt, RefreshCw } from 'lucide-react';
 import type { SellerBalance, SalesTransaction, WithdrawalRequest, Bank } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { calculatePayoutFee, PayoutFeeCalculation } from '../config/feeConfig';
+import { calculatePayoutFee, PayoutFeeCalculation, setActiveFeeConfig, isFeeConfigLoaded } from '../utils/feeCalculator';
 
 const SUPPORTED_BANKS: Bank[] = [
   { id: 'opay', name: 'Opay', code: '999992' },
@@ -77,10 +77,31 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
   const [cancelTarget, setCancelTarget] = useState<WithdrawalRequest | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
+  const [loadingFees, setLoadingFees] = useState(false);
+  const [feeError, setFeeError] = useState<string | null>(null);
+
+  const fetchFees = async () => {
+    setLoadingFees(true);
+    setFeeError(null);
+    try {
+      const cfg = await api.getFeeConfig();
+      if (cfg && cfg.sellerPayout && Array.isArray(cfg.sellerPayout.tiers) && cfg.sellerPayout.tiers.length > 0) {
+        setActiveFeeConfig(cfg);
+        setFeeError(null);
+      } else {
+        setFeeError('Could not retrieve withdrawal fee schedule from Google Sheets.');
+      }
+    } catch (err: any) {
+      setFeeError(err.message || 'Unable to connect to Google Sheets to load payout charges.');
+    } finally {
+      setLoadingFees(false);
+    }
+  };
+
   // Live calculation of payout deductions and net amount received
   const numAmt = Number(amt) || 0;
   let feeCalc: PayoutFeeCalculation | null = null;
-  if (numAmt > 0) {
+  if (numAmt > 0 && !loadingFees && !feeError) {
     try {
       feeCalc = calculatePayoutFee(numAmt);
     } catch {
@@ -120,6 +141,12 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
   useEffect(() => {
     loadData();
   }, [user]);
+
+  useEffect(() => {
+    if (modalOpen) {
+      fetchFees();
+    }
+  }, [modalOpen]);
 
   const handleAccountNumChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Accept digits only, exactly 10 characters.
@@ -527,8 +554,35 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
               />
             </div>
 
+            {/* Fee schedule loading state */}
+            {loadingFees && (
+              <div className="p-3 bg-blue-50/70 rounded-2xl border border-blue-200 text-blue-800 text-xs flex items-center gap-2.5 animate-in fade-in">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600 flex-shrink-0" />
+                <span>Fetching withdrawal fee schedule from Google Sheets...</span>
+              </div>
+            )}
+
+            {/* Fee schedule error state */}
+            {feeError && !loadingFees && (
+              <div className="p-3 bg-red-50 rounded-2xl border border-red-200 text-red-900 text-xs flex items-start gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-bold">Unable to Load Payout Charges</p>
+                  <p className="text-[11px] text-red-700 mt-0.5">{feeError}</p>
+                  <button
+                    type="button"
+                    onClick={fetchFees}
+                    className="mt-2 inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-red-700 bg-red-100 hover:bg-red-200 rounded-lg transition"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Retry Loading Fees
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Live Payout Fee Breakdown */}
-            {feeCalc && (
+            {feeCalc && !loadingFees && !feeError && (
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5 text-xs animate-in fade-in">
                 <div className="flex items-center gap-1.5 font-bold text-slate-700 pb-1 border-b border-slate-200/70">
                   <Receipt className="w-3.5 h-3.5 text-cu-blue" />
@@ -630,13 +684,17 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || accNum.length !== 10 || !amt || !accName.trim() || !feeCalc || !feeCalc.isValid}
+                disabled={isSubmitting || loadingFees || Boolean(feeError) || accNum.length !== 10 || !amt || !accName.trim() || !feeCalc || !feeCalc.isValid}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow transition-colors disabled:opacity-50 flex items-center gap-1.5"
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" /> Submitting...
                   </>
+                ) : loadingFees ? (
+                  'Loading Fees...'
+                ) : feeError ? (
+                  'Fees Unavailable'
                 ) : (
                   'Submit Withdrawal Request'
                 )}

@@ -35,14 +35,11 @@ import {
   validateWithdrawalBankAndAccount,
   recordFinancialTransaction,
   reconcileTransaction,
-  bulkProcessWithdrawals
-} from '../Wallet.js';
-import {
-  FEE_CONFIG,
+  bulkProcessWithdrawals,
   calculateTopUpFee,
   calculatePayoutFee,
   getFeeTier
-} from '../FeeConfig.js';
+} from '../Wallet.js';
 
 test('database schema includes separated wallets, merged chat/notification tables, and central ledger', () => {
   assert.ok(SHEETS_SCHEMA.Users);
@@ -92,6 +89,10 @@ test('database schema includes separated wallets, merged chat/notification table
 
   ['netAmount', 'totalFee', 'feePercentage', 'percentageFee', 'flatFee', 'totalAmountPaid', 'feeSnapshot']
     .forEach(col => assert.ok(SHEETS_SCHEMA.Transactions.includes(col), `Transactions missing ${col}`));
+
+  assert.ok(SHEETS_SCHEMA.FeeConfig);
+  ['configId', 'category', 'min', 'max', 'percentage', 'flatFee', 'description', 'updatedAt']
+    .forEach(col => assert.ok(SHEETS_SCHEMA.FeeConfig.includes(col), `FeeConfig missing ${col}`));
 });
 
 test('auth validates CU email', () => {
@@ -810,25 +811,52 @@ test('wallet top-up tier fee calculations match progressive tier rules across al
   assert.equal(t3_boundary.percentageRate, 3.5);
   assert.equal(t3_boundary.flatFee, 200);
 
-  // Tier 4: ₦100,000 and above (4% + ₦2,000)
+  // Tier 4: User edited to 2.0% + ₦2,000 flat for ₦100,000 – ₦200,000
   const t4_100000 = calculateTopUpFee(100000);
-  assert.equal(t4_100000.percentageRate, 4);
-  assert.equal(t4_100000.percentageFee, 4000);
+  assert.equal(t4_100000.percentageRate, 2.0);
+  assert.equal(t4_100000.percentageFee, 2000);
   assert.equal(t4_100000.flatFee, 2000);
-  assert.equal(t4_100000.totalFee, 6000);
-  assert.equal(t4_100000.totalPayment, 106000);
+  assert.equal(t4_100000.totalFee, 4000);
+  assert.equal(t4_100000.totalPayment, 104000);
 
-  const t4_high = calculateTopUpFee(250000);
-  assert.equal(t4_high.percentageRate, 4);
-  assert.equal(t4_high.percentageFee, 10000);
-  assert.equal(t4_high.flatFee, 2000);
-  assert.equal(t4_high.totalFee, 12000);
-  assert.equal(t4_high.totalPayment, 262000);
+  // Tier 5: ₦200,000 and above (2.0% + ₦2,000)
+  const t5_high = calculateTopUpFee(250000);
+  assert.equal(t5_high.percentageRate, 2.0);
+  assert.equal(t5_high.percentageFee, 5000);
+  assert.equal(t5_high.flatFee, 2000);
+  assert.equal(t5_high.totalFee, 7000);
+  assert.equal(t5_high.totalPayment, 257000);
 
   // Invalid amounts
   assert.throws(() => calculateTopUpFee(0), /positive number/);
   assert.throws(() => calculateTopUpFee(-100), /positive number/);
   assert.throws(() => calculateTopUpFee('invalid'), /positive number/);
+});
+
+test('fee tier matcher supports adding arbitrary new amount ranges and handles unclosed upper bounds', () => {
+  // Test arbitrary custom tiers with multiple amount ranges
+  const customTiers = [
+    { min: 0, max: 10000, percentage: 1.0, flatFee: 50 },
+    { min: 10000, max: 50000, percentage: 1.5, flatFee: 100 },
+    { min: 50000, max: 200000, percentage: 2.0, flatFee: 150 },
+    { min: 200000, max: 500000, percentage: 2.5, flatFee: 200 },
+    // Notice max is null here, and user later added an even higher tier also with max: null
+    { min: 500000, max: null, percentage: 3.0, flatFee: 500 },
+    { min: 1000000, max: null, percentage: 3.5, flatFee: 1000 }
+  ];
+
+  // ₦5,000 -> Tier 1 (1%)
+  assert.equal(getFeeTier(5000, customTiers).percentage, 1.0);
+  // ₦25,000 -> Tier 2 (1.5%)
+  assert.equal(getFeeTier(25000, customTiers).percentage, 1.5);
+  // ₦100,000 -> Tier 3 (2.0%)
+  assert.equal(getFeeTier(100000, customTiers).percentage, 2.0);
+  // ₦300,000 -> Tier 4 (2.5%)
+  assert.equal(getFeeTier(300000, customTiers).percentage, 2.5);
+  // ₦750,000 -> Tier 5 (3.0%) because upper bound automatically clamped to 1,000,000
+  assert.equal(getFeeTier(750000, customTiers).percentage, 3.0);
+  // ₦1,500,000 -> Tier 6 (3.5%)
+  assert.equal(getFeeTier(1500000, customTiers).percentage, 3.5);
 });
 
 test('seller payout tier fee calculations match progressive fee rules across all boundaries', () => {

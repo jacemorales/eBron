@@ -283,6 +283,16 @@ var SHEETS_SCHEMA = {
     'createdAt',
     'updatedAt'
   ],
+  FeeConfig: [
+    'configId',
+    'category', // 'walletTopUp' | 'sellerPayout'
+    'min',
+    'max',
+    'percentage',
+    'flatFee',
+    'description',
+    'updatedAt'
+  ],
   AnalyticsEvents: [
     'eventId',
     'eventType',
@@ -294,41 +304,87 @@ var SHEETS_SCHEMA = {
 };
 
 // ============================================================================
-// CENTRALIZED FEE CONFIGURATION & PROGRESSIVE CHARGE RULES
+// DYNAMIC FEE EVALUATION & CALCULATION (FeeConfig Google Sheet is Single Authority)
 // ============================================================================
-var FEE_CONFIG = {
-  walletTopUp: {
-    tiers: [
-      { min: 0, max: 5000, percentage: 2.5, flatFee: 200 },
-      { min: 5000, max: 30000, percentage: 3.0, flatFee: 200 },
-      { min: 30000, max: 100000, percentage: 3.5, flatFee: 200 },
-      { min: 100000, max: null, percentage: 4.0, flatFee: 2000 }
-    ]
-  },
-  sellerPayout: {
-    tiers: [
-      { min: 0, max: 5000, percentage: 6.0, flatFee: 100 },
-      { min: 5000, max: 25000, percentage: 5.0, flatFee: 100 },
-      { min: 25000, max: 80000, percentage: 6.0, flatFee: 200 },
-      { min: 80000, max: null, percentage: 5.0, flatFee: 500 }
-    ]
-  }
-};
 
 function getFeeTier(amount, tiers) {
   var num = Number(amount);
-  if (isNaN(num) || num <= 0) return null;
-  for (var i = 0; i < tiers.length; i++) {
-    var tier = tiers[i];
-    var meetsMin = num >= tier.min;
-    var meetsMax = tier.max === null || tier.max === undefined || num < tier.max;
-    if (meetsMin && meetsMax) return tier;
+  if (isNaN(num) || num <= 0 || !Array.isArray(tiers) || tiers.length === 0) return null;
+  var sorted = tiers.slice().sort(function(a, b) {
+    return (Number(a.min) || 0) - (Number(b.min) || 0);
+  });
+  var matchedTier = null;
+  for (var i = 0; i < sorted.length; i++) {
+    var tier = sorted[i];
+    var nextTier = sorted[i + 1];
+    var min = Number(tier.min) || 0;
+    var effectiveMax = (tier.max !== null && tier.max !== undefined && String(tier.max).trim() !== '' && !isNaN(Number(tier.max)))
+      ? Number(tier.max)
+      : (nextTier ? (Number(nextTier.min) || null) : null);
+    var meetsMin = num >= min;
+    var meetsMax = effectiveMax === null || isNaN(effectiveMax) || num < effectiveMax;
+    if (meetsMin && meetsMax) {
+      matchedTier = tier;
+    }
   }
-  return tiers[tiers.length - 1] || null;
+  return matchedTier || sorted[sorted.length - 1] || null;
+}
+
+/**
+ * Loads fee configuration dynamically from the 'FeeConfig' Google Sheet tab.
+ * There is NO hardcoded in-code fallback. The FeeConfig sheet is the sole authority.
+ */
+function getActiveFeeConfig() {
+  try {
+    var ss = getDb();
+    var sheet = ss.getSheetByName('FeeConfig');
+    if (!sheet) {
+      throw new Error("Sheet tab 'FeeConfig' does not exist in the spreadsheet.");
+    }
+    if (sheet.getLastRow() <= 1) {
+      throw new Error("The 'FeeConfig' sheet tab exists but contains no data rows.");
+    }
+    var rows = getSheetRows('FeeConfig');
+    if (!rows || rows.length === 0) {
+      throw new Error("The 'FeeConfig' sheet tab contains no readable records.");
+    }
+    var topUpTiers = [];
+    var payoutTiers = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var cat = String(r.category || r.type || '').trim().toLowerCase();
+      if (!cat) continue;
+      var minVal = Number(r.min) || 0;
+      var rawMax = r.max;
+      var maxVal = (rawMax !== null && rawMax !== undefined && String(rawMax).trim() !== '' && String(rawMax).toLowerCase() !== 'null')
+        ? Number(rawMax)
+        : null;
+      var pct = Number(r.percentage || r.rate || 0);
+      var flat = Number(r.flatFee || r.flatCost || 0);
+      var tierObj = { min: minVal, max: maxVal, percentage: pct, flatFee: flat };
+      if (cat === 'wallettopup' || cat === 'topup' || cat === 'deposit') {
+        topUpTiers.push(tierObj);
+      } else if (cat === 'sellerpayout' || cat === 'payout' || cat === 'withdrawal') {
+        payoutTiers.push(tierObj);
+      }
+    }
+    if (topUpTiers.length > 0 || payoutTiers.length > 0) {
+      topUpTiers.sort(function(a, b) { return a.min - b.min; });
+      payoutTiers.sort(function(a, b) { return a.min - b.min; });
+      return {
+        walletTopUp: { tiers: topUpTiers },
+        sellerPayout: { tiers: payoutTiers }
+      };
+    }
+    throw new Error("No rows matching category 'walletTopUp' or 'sellerPayout' found in 'FeeConfig'.");
+  } catch (err) {
+    Logger.log('Could not load dynamic FeeConfig sheet: ' + err.toString());
+    throw new Error('Unable to read FeeConfig sheet: ' + (err.message || err.toString()));
+  }
 }
 
 function calculateTopUpFee(amount, config) {
-  var cfg = config || FEE_CONFIG;
+  var cfg = config || getActiveFeeConfig();
   var num = Number(amount);
   if (isNaN(num) || num <= 0) throw new Error('Top-up amount must be a positive number.');
   var tier = getFeeTier(num, cfg.walletTopUp.tiers);
@@ -351,7 +407,7 @@ function calculateTopUpFee(amount, config) {
 }
 
 function calculatePayoutFee(amount, config) {
-  var cfg = config || FEE_CONFIG;
+  var cfg = config || getActiveFeeConfig();
   var num = Number(amount);
   if (isNaN(num) || num <= 0) throw new Error('Withdrawal amount must be a positive number.');
   var tier = getFeeTier(num, cfg.sellerPayout.tiers);
@@ -384,6 +440,10 @@ function getDb() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+function getSpreadsheet() {
+  return getDb();
+}
+
 function setupDatabase() {
   var ss = getDb();
   var sheetNames = Object.keys(SHEETS_SCHEMA);
@@ -414,6 +474,48 @@ function setupDatabase() {
       });
     }
   });
+
+  // Pre-populate FeeConfig with active default tiers if empty
+  var feeSheet = ss.getSheetByName('FeeConfig');
+  if (feeSheet && feeSheet.getLastRow() <= 1) {
+    var nowIso = new Date().toISOString();
+    var starterTopUpTiers = [
+      { min: 0, max: 5000, percentage: 2.5, flatFee: 200 },
+      { min: 5000, max: 30000, percentage: 3.0, flatFee: 200 },
+      { min: 30000, max: 100000, percentage: 3.5, flatFee: 200 },
+      { min: 100000, max: '', percentage: 2.0, flatFee: 2000 }
+    ];
+    var starterPayoutTiers = [
+      { min: 0, max: 5000, percentage: 6.0, flatFee: 100 },
+      { min: 5000, max: 25000, percentage: 5.0, flatFee: 100 },
+      { min: 25000, max: 80000, percentage: 6.0, flatFee: 200 },
+      { min: 80000, max: '', percentage: 5.0, flatFee: 500 }
+    ];
+    starterTopUpTiers.forEach(function(t, idx) {
+      appendSheetRow('FeeConfig', {
+        configId: 'cfg_topup_' + (idx + 1),
+        category: 'walletTopUp',
+        min: t.min,
+        max: (t.max !== null && t.max !== undefined) ? t.max : '',
+        percentage: t.percentage,
+        flatFee: t.flatFee,
+        description: 'Wallet top-up tier ' + (idx + 1),
+        updatedAt: nowIso
+      });
+    });
+    starterPayoutTiers.forEach(function(t, idx) {
+      appendSheetRow('FeeConfig', {
+        configId: 'cfg_payout_' + (idx + 1),
+        category: 'sellerPayout',
+        min: t.min,
+        max: (t.max !== null && t.max !== undefined) ? t.max : '',
+        percentage: t.percentage,
+        flatFee: t.flatFee,
+        description: 'Seller payout tier ' + (idx + 1),
+        updatedAt: nowIso
+      });
+    });
+  }
 
   // Sheets retired after table merges. Conversations now live in Messages,
   // subscriptions now live in Notifications.
@@ -1169,7 +1271,7 @@ function doGet(e) {
 
     // 0b. GET CENTRALIZED FEE CONFIGURATION
     if (action === 'getFeeConfig') {
-      return jsonOutput({ success: true, config: FEE_CONFIG });
+      return jsonOutput({ success: true, config: getActiveFeeConfig() });
     }
 
     // 1. GET PRODUCTS
@@ -1785,6 +1887,10 @@ function doPost(e) {
       payload = JSON.parse(e.postData.contents);
     }
     var action = payload.action;
+
+    if (action === 'getFeeConfig') {
+      return jsonOutput({ success: true, config: getActiveFeeConfig() });
+    }
 
     // Global Account Status Check: prevent deactivated accounts from performing protected marketplace operations
     var restrictedActions = [

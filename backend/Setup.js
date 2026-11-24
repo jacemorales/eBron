@@ -267,6 +267,16 @@ var SHEETS_SCHEMA = {
     'targetId',
     'ipAddress',
     'createdAt'
+  ],
+  FeeConfig: [
+    'configId',
+    'category', // 'walletTopUp' | 'sellerPayout'
+    'min',
+    'max',
+    'percentage',
+    'flatFee',
+    'description',
+    'updatedAt'
   ]
 };
 

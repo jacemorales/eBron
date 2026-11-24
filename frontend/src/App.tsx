@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { api } from './services/api';
+import { setActiveFeeConfig } from './utils/feeCalculator';
 import { Navbar } from './components/Navbar';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { BrowseProducts } from './pages/BrowseProducts';
@@ -25,6 +27,16 @@ import { Profile } from './pages/Profile';
 
 export const AppContent: React.FC = () => {
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
+
+  useEffect(() => {
+    api.getFeeConfig().then(cfg => {
+      if (cfg && cfg.walletTopUp && cfg.sellerPayout) {
+        setActiveFeeConfig(cfg);
+      }
+    }).catch(err => {
+      console.warn('Could not load remote fee configuration, using local configuration:', err);
+    });
+  }, []);
 
   const showToast = (type: any, msg: string) => {
     setToast({ type, msg });
