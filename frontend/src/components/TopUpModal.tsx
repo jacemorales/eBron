@@ -49,10 +49,10 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
         setActiveFeeConfig(cfg);
         setFeeError(null);
       } else {
-        setFeeError('Could not retrieve fee schedule from Google Sheets.');
+        setFeeError('Could not retrieve fee schedule from the server.');
       }
     } catch (err: any) {
-      setFeeError(err.message || 'Unable to connect to Google Sheets to load charges.');
+      setFeeError(err.message || 'Unable to connect to server to load service charges.');
     } finally {
       setLoadingFees(false);
     }
@@ -248,7 +248,7 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
         {loadingFees && (
           <div className="p-3 bg-blue-50/70 rounded-2xl border border-blue-200 text-blue-800 text-xs flex items-center gap-2.5 animate-in fade-in">
             <Loader2 className="w-4 h-4 animate-spin text-blue-600 flex-shrink-0" />
-            <span>Fetching live fee schedule from Google Sheets...</span>
+            <span>Fetching live fee schedule...</span>
           </div>
         )}
 

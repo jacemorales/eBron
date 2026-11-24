@@ -1,11 +1,11 @@
 /**
  * eBron - Dynamic Fee Calculator (Frontend)
  *
- * All percentage charges and flat fees are fetched dynamically from the
- * FeeConfig Google Sheet. There are NO hardcoded fallback rates in code.
+ * All percentage charges and flat fees are fetched dynamically from the server.
+ * There are NO hardcoded fallback rates in code.
  *
  * The button is disabled and calculations are locked until fee tiers are
- * verified directly from Google Sheets.
+ * verified directly from the server.
  */
 
 export interface FeeTier {
@@ -124,12 +124,12 @@ export function calculateTopUpFee(amount: number, config: FeeConfiguration | nul
   }
 
   if (!config || !config.walletTopUp || !Array.isArray(config.walletTopUp.tiers) || config.walletTopUp.tiers.length === 0) {
-    throw new Error('Fee schedule is loading from the FeeConfig Google Sheet. Please check your connection and retry.');
+    throw new Error('Fee schedule is loading from server. Please check your connection and retry.');
   }
 
   const tier = getFeeTier(num, config.walletTopUp.tiers);
   if (!tier) {
-    throw new Error('No applicable fee tier found in FeeConfig for top-up amount.');
+    throw new Error('No applicable fee tier found for top-up amount.');
   }
 
   const amountKobo = Math.round(num * 100);
@@ -162,12 +162,12 @@ export function calculatePayoutFee(amount: number, config: FeeConfiguration | nu
   }
 
   if (!config || !config.sellerPayout || !Array.isArray(config.sellerPayout.tiers) || config.sellerPayout.tiers.length === 0) {
-    throw new Error('Fee schedule is loading from the FeeConfig Google Sheet. Please check your connection and retry.');
+    throw new Error('Fee schedule is loading from server. Please check your connection and retry.');
   }
 
   const tier = getFeeTier(num, config.sellerPayout.tiers);
   if (!tier) {
-    throw new Error('No applicable fee tier found in FeeConfig for payout amount.');
+    throw new Error('No applicable fee tier found for payout amount.');
   }
 
   const amountKobo = Math.round(num * 100);

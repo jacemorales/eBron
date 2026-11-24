@@ -27,9 +27,9 @@ import type {
 } from '../types';
 
 /**
- * Universal Google Apps Script API Client.
+ * Universal Backend API Client.
  *
- * NOTE: Google Apps Script Web App endpoints do not support standard browser preflight OPTIONS requests.
+ * NOTE: Backend Web App endpoints do not support standard browser preflight OPTIONS requests.
  * To prevent CORS errors from modern browsers (ERR_FAILED / preflight blocked):
  * 1. POST requests send payloads as 'text/plain;charset=utf-8' containing JSON string.
  * 2. GET requests omit empty/undefined parameters to avoid sending "undefined" strings.
@@ -51,7 +51,7 @@ function sanitizeParams(params: Record<string, any>): Record<string, string> {
 
 async function gasGet(action: string, params: Record<string, any> = {}): Promise<any> {
   if (!GAS_API_URL) {
-    throw new Error('Google Apps Script Web App URL (VITE_API_URL) is not configured in .env. Please configure your Google Apps Script deployment URL.');
+    throw new Error('Server URL (VITE_API_URL) is not configured. Please contact support.');
   }
 
   const url = new URL(GAS_API_URL);
@@ -70,7 +70,7 @@ async function gasGet(action: string, params: Record<string, any> = {}): Promise
     });
 
     if (!response.ok) {
-      throw new Error(`Google Apps Script API responded with HTTP status ${response.status}`);
+      throw new Error(`Server responded with HTTP status ${response.status}`);
     }
 
     const data = await response.json();

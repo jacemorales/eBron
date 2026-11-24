@@ -339,14 +339,14 @@ function getActiveFeeConfig() {
     var ss = getDb();
     var sheet = ss.getSheetByName('FeeConfig');
     if (!sheet) {
-      throw new Error("Sheet tab 'FeeConfig' does not exist in the spreadsheet.");
+      throw new Error("Fee configuration is not configured on the server.");
     }
     if (sheet.getLastRow() <= 1) {
-      throw new Error("The 'FeeConfig' sheet tab exists but contains no data rows.");
+      throw new Error("Fee configuration schedule has no records on the server.");
     }
     var rows = getSheetRows('FeeConfig');
     if (!rows || rows.length === 0) {
-      throw new Error("The 'FeeConfig' sheet tab contains no readable records.");
+      throw new Error("Fee configuration contains no readable records on the server.");
     }
     var topUpTiers = [];
     var payoutTiers = [];
@@ -376,10 +376,10 @@ function getActiveFeeConfig() {
         sellerPayout: { tiers: payoutTiers }
       };
     }
-    throw new Error("No rows matching category 'walletTopUp' or 'sellerPayout' found in 'FeeConfig'.");
+    throw new Error("No valid fee tiers found on server.");
   } catch (err) {
-    Logger.log('Could not load dynamic FeeConfig sheet: ' + err.toString());
-    throw new Error('Unable to read FeeConfig sheet: ' + (err.message || err.toString()));
+    Logger.log('Could not load dynamic FeeConfig: ' + err.toString());
+    throw new Error('Unable to read fee configuration: ' + (err.message || err.toString()));
   }
 }
 

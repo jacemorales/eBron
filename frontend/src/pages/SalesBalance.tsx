@@ -89,10 +89,10 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
         setActiveFeeConfig(cfg);
         setFeeError(null);
       } else {
-        setFeeError('Could not retrieve withdrawal fee schedule from Google Sheets.');
+        setFeeError('Could not retrieve withdrawal fee schedule from the server.');
       }
     } catch (err: any) {
-      setFeeError(err.message || 'Unable to connect to Google Sheets to load payout charges.');
+      setFeeError(err.message || 'Unable to connect to server to load payout charges.');
     } finally {
       setLoadingFees(false);
     }
@@ -558,7 +558,7 @@ export const SalesBalancePage: React.FC<{ onToast: (type: 'success' | 'error' | 
             {loadingFees && (
               <div className="p-3 bg-blue-50/70 rounded-2xl border border-blue-200 text-blue-800 text-xs flex items-center gap-2.5 animate-in fade-in">
                 <Loader2 className="w-4 h-4 animate-spin text-blue-600 flex-shrink-0" />
-                <span>Fetching withdrawal fee schedule from Google Sheets...</span>
+                <span>Fetching withdrawal fee schedule...</span>
               </div>
             )}
 

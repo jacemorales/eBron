@@ -55,7 +55,7 @@ export function calculateTopUpFee(amount, feeConfig = DEFAULT_TEST_FEES) {
 
   const tiers = feeConfig?.walletTopUp?.tiers;
   if (!Array.isArray(tiers) || tiers.length === 0) {
-    throw new Error('Fee schedule must be loaded from FeeConfig.');
+    throw new Error('Fee schedule must be loaded from server.');
   }
 
   const tier = getFeeTier(num, tiers);
@@ -89,7 +89,7 @@ export function calculatePayoutFee(amount, feeConfig = DEFAULT_TEST_FEES) {
 
   const tiers = feeConfig?.sellerPayout?.tiers;
   if (!Array.isArray(tiers) || tiers.length === 0) {
-    throw new Error('Fee schedule must be loaded from FeeConfig.');
+    throw new Error('Fee schedule must be loaded from server.');
   }
 
   const tier = getFeeTier(num, tiers);
